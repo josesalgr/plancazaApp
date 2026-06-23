@@ -1,0 +1,4 @@
+username,password,role,territory
+admin,admin123,admin,all
+mapa,mapa123,mapa,national
+catalunya,cat123,regional,Cataluña

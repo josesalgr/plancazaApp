@@ -1,0 +1,17 @@
+autonomous_community,province,scale,latitude,longitude,abundance_index,population_trend,historic_harvest,hunting_effort,migration_pressure,sensitive_area,active_management,waiver_rate
+Cataluña,Barcelona,Regional,41.3874,2.1686,42,-8,1200,58,64,TRUE,TRUE,0.02
+Cataluña,Girona,Regional,41.9794,2.8214,51,-3,820,42,72,TRUE,TRUE,0.01
+Cataluña,Lleida,Regional,41.6176,0.6200,66,4,1450,61,55,FALSE,TRUE,0.00
+Cataluña,Tarragona,Regional,41.1189,1.2445,58,2,1100,49,48,FALSE,FALSE,0.02
+Castilla-La Mancha,Albacete,Regional,38.9943,-1.8585,74,6,2100,70,42,FALSE,TRUE,0.01
+Castilla-La Mancha,Ciudad Real,Regional,38.9848,-3.9274,63,1,1900,63,47,FALSE,TRUE,0.03
+Castilla-La Mancha,Cuenca,Regional,40.0704,-2.1374,57,-2,980,38,50,TRUE,FALSE,0.00
+Castilla-La Mancha,Guadalajara,Regional,40.6333,-3.1667,44,-7,760,33,62,TRUE,FALSE,0.01
+Castilla-La Mancha,Toledo,Regional,39.8628,-4.0273,69,3,1750,57,45,FALSE,TRUE,0.02
+Andalucía,Sevilla,Nacional,37.3891,-5.9845,61,-1,2350,74,58,FALSE,TRUE,0.04
+Andalucía,Córdoba,Nacional,37.8882,-4.7794,55,-5,1800,62,53,FALSE,FALSE,0.03
+Extremadura,Badajoz,Nacional,38.8794,-6.9707,68,2,2050,68,44,FALSE,TRUE,0.02
+Extremadura,Cáceres,Nacional,39.4753,-6.3724,59,-4,1550,52,49,TRUE,TRUE,0.01
+Comunidad Valenciana,Valencia,Nacional,39.4699,-0.3763,46,-6,1320,44,66,TRUE,FALSE,0.02
+Aragón,Zaragoza,Nacional,41.6488,-0.8891,53,-3,1180,47,57,FALSE,FALSE,0.01
+Madrid,Madrid,Nacional,40.4168,-3.7038,37,-9,900,36,69,TRUE,FALSE,0.00
