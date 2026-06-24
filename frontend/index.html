@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PLAN-CAZA MapLibre</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">PLAN-CAZA</div>
+    <nav>
+      <button class="active" data-i18n="navInput">Datos de entrada</button>
+      <button data-i18n="navNational">Escenario nacional</button>
+      <button data-i18n="navRegional">Escenario regional</button>
+      <button data-i18n="navExport">Exportación</button>
+    </nav>
+    <div class="language-switch" aria-label="Idioma">
+      <button class="active" data-lang="es">ES</button>
+      <button data-lang="ca">CA</button>
+    </div>
+    <label class="user-switch">
+      <span data-i18n="userLabel">Usuario</span>
+      <select id="userRole">
+        <option value="admin">Admin</option>
+        <option value="mapa">MAPA</option>
+        <option value="cca">CCA</option>
+      </select>
+    </label>
+  </header>
+
+  <main class="workspace">
+    <aside class="layer-panel" id="layerPanel">
+      <div class="panel-header">
+        <strong data-i18n="layers">Capas</strong>
+        <div class="panel-actions">
+          <button id="createGroup" class="panel-icon-button group-button" title="Crear grupo" aria-label="Crear grupo"></button>
+          <button id="openAddData" class="panel-icon-button add-layer-button" title="Añadir datos" aria-label="Añadir datos"></button>
+          <button class="panel-toggle panel-icon-button" id="hidePanel" title="Ocultar panel" aria-label="Ocultar panel">&lsaquo;</button>
+        </div>
+      </div>
+      <button class="collapsed-rail" id="showPanel" title="Mostrar panel">
+        <span class="rail-icon">▣</span>
+        <span class="rail-layer-icon">▱</span>
+        <span class="rail-label" data-i18n="layers">Capas</span>
+      </button>
+
+      <section class="layer-list">
+        <div id="layerTree" class="layer-tree"></div>
+        <article class="layer-card base-card" data-base-layer="ccaa">
+          <div class="layer-row">
+            <button type="button" id="baseCcaaVisible" class="visibility-toggle is-visible" aria-label="Ocultar capa"></button>
+            <strong>CCAA</strong>
+            <span class="pill">BASE</span>
+          </div>
+          <small data-i18n="ccaaShapes">Límites autonómicos</small>
+          <label class="opacity-row">
+            <span class="opacity-label" data-i18n="opacity">Opacidad</span>
+            <input id="baseCcaaOpacity" type="range" min="0" max="1" value="0.72" step="0.05" />
+          </label>
+        </article>
+        <article class="layer-card base-card" data-base-layer="provinces">
+          <div class="layer-row">
+            <button type="button" id="baseProvinceVisible" class="visibility-toggle is-visible" aria-label="Ocultar capa"></button>
+            <strong>Provincias</strong>
+            <span class="pill">BASE</span>
+          </div>
+          <small data-i18n="provinceShapes">Límites provinciales</small>
+          <label class="opacity-row">
+            <span class="opacity-label" data-i18n="opacity">Opacidad</span>
+            <input id="baseProvinceOpacity" type="range" min="0" max="1" value="0.9" step="0.05" />
+          </label>
+        </article>
+        <div id="uploadedLayers" class="uploaded-layers"></div>
+      </section>
+    </aside>
+
+    <section class="map-shell">
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <dialog id="layerDialog" class="add-data-dialog">
+    <form method="dialog" class="dialog-card">
+      <button class="dialog-close" value="cancel" title="Cerrar">&times;</button>
+      <h2 data-i18n="addDataTitle">Añadir datos</h2>
+      <div class="drop-zone" id="dropZone">
+        <input id="fileInput" type="file" accept=".geojson,.json,.csv,.tif,.tiff" />
+        <div class="drop-icon">⇧</div>
+        <strong data-i18n="dropTitle">Suelta un archivo o haz clic para seleccionar</strong>
+        <span data-i18n="dropHint">GeoJSON, CSV con lon/lat o GeoTIFF en WGS84</span>
+      </div>
+      <p class="selected-file" id="selectedFile" data-i18n="noFile">Ningún archivo seleccionado</p>
+      <label>
+        <span data-i18n="layerName">Nombre de la capa</span>
+        <input id="layerName" type="text" required />
+      </label>
+      <label class="admin-target">
+        <span data-i18n="layerTarget">Destino</span>
+        <select id="layerTarget">
+          <option value="admin" data-i18n="targetAdmin">Datos comunes</option>
+          <option value="mapa" data-i18n="targetMapa">Datos MAPA</option>
+          <option value="cca" data-i18n="targetCca">Datos CCA</option>
+          <option value="both" data-i18n="targetBoth">Datos MAPA + CCA</option>
+        </select>
+      </label>
+      <label class="check-row">
+        <input id="overwriteLayer" type="checkbox" />
+        <span data-i18n="overwrite">Sobrescribir si ya existe</span>
+      </label>
+      <p class="dialog-message" id="dialogMessage"></p>
+      <footer>
+        <button value="cancel" data-i18n="cancel">Cancelar</button>
+        <button id="confirmLayer" class="primary" value="default" data-i18n="save">Guardar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast"></div>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/geotiff@2.1.3/dist-browser/geotiff.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

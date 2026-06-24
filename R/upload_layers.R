@@ -6,6 +6,63 @@ uploaded_layer_id <- local({
   }
 })
 
+stored_layers_dir <- file.path("data", "uploaded_layers")
+
+ensure_stored_layers_dir <- function() {
+  dir.create(stored_layers_dir, showWarnings = FALSE, recursive = TRUE)
+}
+
+sanitize_layer_id <- function(name) {
+  cleaned <- iconv(name, to = "ASCII//TRANSLIT", sub = "")
+  cleaned <- tolower(gsub("[^a-zA-Z0-9]+", "_", cleaned))
+  cleaned <- gsub("^_+|_+$", "", cleaned)
+  if (!nzchar(cleaned)) {
+    cleaned <- "layer"
+  }
+  paste0(cleaned, "_", format(Sys.time(), "%Y%m%d%H%M%S"), "_", sample(1000:9999, 1))
+}
+
+stored_layer_path <- function(id) {
+  ensure_stored_layers_dir()
+  file.path(stored_layers_dir, paste0(id, ".rds"))
+}
+
+load_stored_layers <- function() {
+  ensure_stored_layers_dir()
+  files <- list.files(stored_layers_dir, pattern = "\\.rds$", full.names = TRUE)
+  layers <- lapply(files, function(path) {
+    tryCatch(readRDS(path), error = function(e) NULL)
+  })
+  layers <- Filter(Negate(is.null), layers)
+  layers[order(vapply(layers, function(layer) layer$order %||% 0, numeric(1)))]
+}
+
+save_stored_layer <- function(layer) {
+  ensure_stored_layers_dir()
+  saveRDS(layer, stored_layer_path(layer$id))
+  invisible(layer)
+}
+
+save_stored_layers <- function(layers) {
+  for (i in seq_along(layers)) {
+    layers[[i]]$order <- i
+    save_stored_layer(layers[[i]])
+  }
+  invisible(layers)
+}
+
+delete_stored_layer <- function(layer) {
+  path <- stored_layer_path(layer$id)
+  if (file.exists(path)) {
+    unlink(path)
+  }
+  invisible(TRUE)
+}
+
+stored_layer_names <- function(layers) {
+  tolower(trimws(vapply(layers, function(layer) layer$name, character(1))))
+}
+
 copy_uploaded_files <- function(files) {
   upload_dir <- tempfile("plancaza_upload_")
   dir.create(upload_dir)
