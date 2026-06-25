@@ -78,6 +78,10 @@
 
     <section class="map-shell">
       <div id="map"></div>
+      <button id="fullscreenMap" class="map-overlay-button fullscreen-map" type="button" title="Pantalla completa" aria-label="Pantalla completa"></button>
+      <div id="mapLegend" class="map-legend is-hidden"></div>
+      <div id="mapScale" class="map-scale"></div>
+      <div id="mapStatus" class="map-status"></div>
     </section>
   </main>
 
@@ -86,12 +90,57 @@
       <button class="dialog-close" value="cancel" title="Cerrar">&times;</button>
       <h2 data-i18n="addDataTitle">Añadir datos</h2>
       <div class="drop-zone" id="dropZone">
-        <input id="fileInput" type="file" accept=".geojson,.json,.csv,.tif,.tiff" />
+        <input id="fileInput" type="file" accept=".geojson,.json,.zip,.csv,.tif,.tiff" />
         <div class="drop-icon">⇧</div>
         <strong data-i18n="dropTitle">Suelta un archivo o haz clic para seleccionar</strong>
-        <span data-i18n="dropHint">GeoJSON, CSV con lon/lat o GeoTIFF en WGS84</span>
+        <span data-i18n="dropHint">GeoJSON, Shapefile ZIP, CSV o GeoTIFF en WGS84</span>
       </div>
       <p class="selected-file" id="selectedFile" data-i18n="noFile">Ningún archivo seleccionado</p>
+      <p class="dialog-note" data-i18n="clipPolicy">Los vectores y CSV se recortan automáticamente a la España peninsular con un buffer de 5 km.</p>
+      <label id="csvModeRow" class="upload-config is-hidden">
+        <span data-i18n="csvMode">Uso del CSV</span>
+        <select id="csvMode">
+          <option value="points" data-i18n="csvModePoints">Puntos con coordenadas</option>
+          <option value="join" data-i18n="csvModeJoin">Tabla para unir a una capa base</option>
+        </select>
+      </label>
+      <div id="csvJoinConfig" class="upload-config upload-stack is-hidden">
+        <label>
+          <span data-i18n="joinTarget">Capa base de destino</span>
+          <select id="joinTarget">
+            <option value="ccaa" data-i18n="joinTargetCcaa">CCAA</option>
+            <option value="provinces" data-i18n="joinTargetProvinces">Provincias</option>
+          </select>
+        </label>
+        <label>
+          <span data-i18n="csvJoinField">Campo del CSV</span>
+          <select id="csvJoinField"></select>
+        </label>
+        <p id="joinTargetHint" class="dialog-note compact-note" data-i18n="joinTargetHintCcaa">Se unirÃ¡ usando el campo autonomous_community de la capa base.</p>
+      </div>
+      <section id="importSummary" class="import-summary is-hidden">
+        <div class="summary-header">
+          <strong data-i18n="importSummaryTitle">Resumen detectado</strong>
+        </div>
+        <div id="importSummaryStats" class="summary-stats"></div>
+        <div id="importGuidance" class="import-guidance is-hidden"></div>
+        <div id="importFieldSelector" class="field-selector is-hidden">
+          <div class="field-selector-header">
+            <strong data-i18n="importFieldsTitle">Columnas a conservar</strong>
+          </div>
+          <div id="importFieldList" class="field-list"></div>
+        </div>
+        <label id="displayFieldRow" class="upload-config is-hidden">
+          <span data-i18n="displayField">Campo de visualización</span>
+          <select id="displayFieldSelect"></select>
+        </label>
+        <div id="importPreviewBlock" class="preview-block is-hidden">
+          <div class="field-selector-header">
+            <strong data-i18n="importPreviewTitle">Vista previa</strong>
+          </div>
+          <div id="importPreviewTable" class="preview-table-wrap"></div>
+        </div>
+      </section>
       <label>
         <span data-i18n="layerName">Nombre de la capa</span>
         <input id="layerName" type="text" required />
@@ -105,10 +154,7 @@
           <option value="both" data-i18n="targetBoth">Datos MAPA + CCA</option>
         </select>
       </label>
-      <label class="check-row">
-        <input id="overwriteLayer" type="checkbox" />
-        <span data-i18n="overwrite">Sobrescribir si ya existe</span>
-      </label>
+      <p class="dialog-message" id="layerWarning"></p>
       <p class="dialog-message" id="dialogMessage"></p>
       <footer>
         <button value="cancel" data-i18n="cancel">Cancelar</button>
@@ -119,7 +165,6 @@
 
   <div id="toast" class="toast"></div>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script src="https://unpkg.com/geotiff@2.1.3/dist-browser/geotiff.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
