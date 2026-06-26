@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PLAN-CAZA MapLibre</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=20260626w" />
 </head>
 <body>
   <header class="topbar">
@@ -48,32 +48,15 @@
 
       <section class="layer-list">
         <div id="layerTree" class="layer-tree"></div>
-        <article class="layer-card base-card" data-base-layer="ccaa">
-          <div class="layer-row">
-            <button type="button" id="baseCcaaVisible" class="visibility-toggle is-visible" aria-label="Ocultar capa"></button>
-            <strong>CCAA</strong>
-            <span class="pill">BASE</span>
-          </div>
-          <small data-i18n="ccaaShapes">Límites autonómicos</small>
-          <label class="opacity-row">
-            <span class="opacity-label" data-i18n="opacity">Opacidad</span>
-            <input id="baseCcaaOpacity" type="range" min="0" max="1" value="0.72" step="0.05" />
-          </label>
-        </article>
-        <article class="layer-card base-card" data-base-layer="provinces">
-          <div class="layer-row">
-            <button type="button" id="baseProvinceVisible" class="visibility-toggle is-visible" aria-label="Ocultar capa"></button>
-            <strong>Provincias</strong>
-            <span class="pill">BASE</span>
-          </div>
-          <small data-i18n="provinceShapes">Límites provinciales</small>
-          <label class="opacity-row">
-            <span class="opacity-label" data-i18n="opacity">Opacidad</span>
-            <input id="baseProvinceOpacity" type="range" min="0" max="1" value="0.9" step="0.05" />
-          </label>
-        </article>
-        <div id="uploadedLayers" class="uploaded-layers"></div>
       </section>
+      <div id="mapSearch" class="map-search sidebar-search">
+        <div class="map-search-box">
+          <span class="map-search-icon" aria-hidden="true"></span>
+          <input id="mapSearchInput" type="text" autocomplete="off" spellcheck="false" />
+          <button id="mapSearchClear" class="map-search-clear is-hidden" type="button" aria-label="Limpiar búsqueda" title="Limpiar búsqueda"></button>
+        </div>
+        <div id="mapSearchResults" class="map-search-results is-hidden"></div>
+      </div>
     </aside>
 
     <section class="map-shell">
@@ -84,6 +67,44 @@
       <div id="mapStatus" class="map-status"></div>
     </section>
   </main>
+
+  <section id="attributePanel" class="attribute-panel is-hidden">
+    <div id="attributeResizeHandle" class="attribute-resize-handle" aria-hidden="true"></div>
+    <div class="attribute-panel-header">
+      <div class="attribute-panel-title">
+        <strong id="attributePanelTitle">Tabla de atributos</strong>
+        <span id="attributePanelSubtitle"></span>
+      </div>
+      <div class="attribute-panel-actions">
+        <div class="attribute-header-search">
+          <input id="attributeSearchInput" type="text" placeholder="Buscar en la tabla..." />
+        </div>
+        <button id="editAttributeTable" class="attribute-panel-button with-label" type="button">Editar</button>
+        <button id="saveAttributeTable" class="attribute-panel-button with-label primary-action" type="button">Guardar</button>
+        <label class="attribute-zoom-toggle">
+          <input id="attributeZoomToSelection" type="checkbox" checked />
+          <span>Zoom a selección</span>
+        </label>
+        <div class="attribute-toolbar-pagination header-pagination">
+          <label>
+            <span>Filas</span>
+            <select id="attributePageSize">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </label>
+          <button type="button" id="attributePrevPage" class="attribute-page-button">&lsaquo;</button>
+          <span id="attributePageStatus" class="attribute-page-status">0 resultados</span>
+          <button type="button" id="attributeNextPage" class="attribute-page-button">&rsaquo;</button>
+        </div>
+        <button id="toggleAttributePanel" class="attribute-panel-button" type="button" aria-label="Minimizar tabla" title="Minimizar tabla"></button>
+        <button id="closeAttributePanel" class="attribute-panel-close" type="button" aria-label="Cerrar tabla" title="Cerrar tabla">&times;</button>
+      </div>
+    </div>
+    <div id="attributeTableWrap" class="attribute-table-wrap"></div>
+  </section>
 
   <dialog id="layerDialog" class="add-data-dialog">
     <form method="dialog" class="dialog-card">
@@ -163,8 +184,24 @@
     </form>
   </dialog>
 
+  <dialog id="renameLayerDialog" class="group-dialog">
+    <form method="dialog" class="dialog-card">
+      <button class="dialog-close" value="cancel" title="Cerrar">&times;</button>
+      <h2 id="renameLayerTitle">Renombrar capa</h2>
+      <label>
+        <span id="renameLayerLabel">Nuevo nombre</span>
+        <input id="renameLayerInput" type="text" required />
+      </label>
+      <p id="renameLayerWarning" class="dialog-message group-warning"></p>
+      <footer>
+        <button class="dialog-secondary" value="cancel">Cancelar</button>
+        <button id="saveLayerRename" class="primary" value="default">Guardar</button>
+      </footer>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast"></div>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=20260626w"></script>
 </body>
 </html>

@@ -17,6 +17,9 @@ source("R/plan_caza_data.R", encoding = "UTF-8")
 plan_data <- load_plan_caza_data()
 plan_shapes <- load_ccaa_shapes()
 clip_buffer_m <- 5000
+display_raster_crs <- "EPSG:3857"
+raster_tile_size <- 256
+web_mercator_limit <- 20037508.342789244
 
 build_peninsular_mask <- function(shapes, buffer_m = 5000) {
   mainland <- shapes |>
@@ -54,6 +57,9 @@ json_response <- function(data, status = 200) {
     status = status,
     headers = list(
       "Content-Type" = "application/json; charset=utf-8",
+      "Cache-Control" = "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma" = "no-cache",
+      "Expires" = "0",
       "Access-Control-Allow-Origin" = "*",
       "Access-Control-Allow-Headers" = "Content-Type",
       "Access-Control-Allow-Methods" = "GET, POST, DELETE, OPTIONS"
@@ -63,7 +69,16 @@ json_response <- function(data, status = 200) {
 }
 
 text_response <- function(text, content_type = "text/plain; charset=utf-8", status = 200) {
-  list(status = status, headers = list("Content-Type" = content_type), body = text)
+  list(
+    status = status,
+    headers = list(
+      "Content-Type" = content_type,
+      "Cache-Control" = "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma" = "no-cache",
+      "Expires" = "0"
+    ),
+    body = text
+  )
 }
 
 read_body <- function(req) {
@@ -78,13 +93,14 @@ query_params <- function(req) {
   }
   if (!nzchar(query)) return(list())
   parts <- strsplit(query, "&", fixed = TRUE)[[1]]
-  values <- lapply(parts, function(part) {
+  values <- setNames(vector("list", length(parts)), character(length(parts)))
+  for (part in parts) {
     item <- strsplit(part, "=", fixed = TRUE)[[1]]
     key <- URLdecode(item[[1]])
     value <- if (length(item) > 1) URLdecode(item[[2]]) else ""
-    setNames(list(value), key)
-  })
-  do.call(c, values)
+    values[[key]] <- value
+  }
+  values
 }
 
 read_manifest <- function() {
@@ -352,10 +368,81 @@ decode_data_url <- function(value) {
   sub("^data:.*;base64,", "", value)
 }
 
+raster_resample_method <- function(raster) {
+  values <- terra::values(raster, mat = TRUE)
+  finite_values <- values[is.finite(values)]
+  if (!length(finite_values)) {
+    return("bilinear")
+  }
+
+  sample_values <- unique(utils::head(finite_values, 512))
+  looks_integer <- all(abs(sample_values - round(sample_values)) < 1e-9)
+  if (looks_integer && length(sample_values) <= 32) "near" else "bilinear"
+}
+
+raw_response <- function(body, content_type = "application/octet-stream", status = 200) {
+  list(
+    status = status,
+    headers = list(
+      "Content-Type" = content_type,
+      "Cache-Control" = "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma" = "no-cache",
+      "Expires" = "0"
+    ),
+    body = body
+  )
+}
+
+download_response <- function(file_path, download_name, content_type = "application/octet-stream") {
+  list(
+    status = 200,
+    headers = list(
+      "Content-Type" = content_type,
+      "Content-Disposition" = sprintf('attachment; filename="%s"', download_name),
+      "Cache-Control" = "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma" = "no-cache",
+      "Expires" = "0"
+    ),
+    body = readBin(file_path, "raw", n = file.info(file_path)$size)
+  )
+}
+
+project_raster_for_display <- function(raster, target_crs = display_raster_crs, mask = peninsular_raster_mask) {
+  if (is.na(terra::crs(raster)) || !nzchar(terra::crs(raster))) {
+    stop("El GeoTIFF necesita un sistema de referencia espacial definido.", call. = FALSE)
+  }
+
+  projected <- if (isTRUE(terra::same.crs(raster, target_crs))) {
+    raster
+  } else {
+    tryCatch({
+      terra::project(raster, target_crs, method = raster_resample_method(raster))
+    }, error = function(e) {
+      stop("No se pudo reproyectar el raster al CRS de visualización: ", e$message, call. = FALSE)
+    })
+  }
+
+  mask_vect <- terra::vect(sf::st_transform(mask, terra::crs(projected)))
+  projected <- tryCatch({
+    terra::mask(terra::crop(projected, mask_vect, snap = "out"), mask_vect)
+  }, error = function(e) {
+    stop("No se pudo ajustar el raster reproyectado a la España peninsular: ", e$message, call. = FALSE)
+  })
+
+  if (ncell(projected) == 0 || all(is.na(terra::values(projected)))) {
+    stop("El raster reproyectado no tiene datos dentro de la España peninsular.", call. = FALSE)
+  }
+
+  projected
+}
+
 raster_metadata <- function(r) {
   ext <- terra::ext(r)
   values <- terra::values(r, mat = TRUE)
   finite_values <- values[is.finite(values)]
+  wgs84_coords <- raster_wgs84_coordinates(r)
+  lon_values <- vapply(wgs84_coords, `[[`, numeric(1), 1)
+  lat_values <- vapply(wgs84_coords, `[[`, numeric(1), 2)
   list(
     width = terra::ncol(r),
     height = terra::nrow(r),
@@ -363,6 +450,12 @@ raster_metadata <- function(r) {
     crs = terra::crs(r),
     min = if (length(finite_values)) min(finite_values, na.rm = TRUE) else NULL,
     max = if (length(finite_values)) max(finite_values, na.rm = TRUE) else NULL,
+    bounds_wgs84 = list(
+      xmin = min(lon_values),
+      ymin = min(lat_values),
+      xmax = max(lon_values),
+      ymax = max(lat_values)
+    ),
     bbox = list(
       xmin = ext$xmin,
       ymin = ext$ymin,
@@ -404,8 +497,9 @@ clip_raster_to_peninsula <- function(input_path, output_path, mask = peninsular_
     stop("El raster no tiene datos dentro de la España peninsular.", call. = FALSE)
   }
 
-  terra::writeRaster(cropped, output_path, overwrite = TRUE)
-  cropped
+  projected <- project_raster_for_display(cropped, display_raster_crs, peninsular_raster_mask)
+  terra::writeRaster(projected, output_path, overwrite = TRUE)
+  projected
 }
 
 normalize_band <- function(values) {
@@ -415,6 +509,20 @@ normalize_band <- function(values) {
   }
   min_value <- min(values[finite], na.rm = TRUE)
   max_value <- max(values[finite], na.rm = TRUE)
+  span <- if (max_value > min_value) max_value - min_value else 1
+  out <- rep(0, length(values))
+  out[finite] <- pmin(1, pmax(0, (values[finite] - min_value) / span))
+  out
+}
+
+normalize_band_with_range <- function(values, min_value = NULL, max_value = NULL) {
+  finite <- is.finite(values)
+  if (!any(finite)) {
+    return(rep(0, length(values)))
+  }
+
+  if (!is.finite(min_value)) min_value <- min(values[finite], na.rm = TRUE)
+  if (!is.finite(max_value)) max_value <- max(values[finite], na.rm = TRUE)
   span <- if (max_value > min_value) max_value - min_value else 1
   out <- rep(0, length(values))
   out[finite] <- pmin(1, pmax(0, (values[finite] - min_value) / span))
@@ -457,8 +565,97 @@ raster_png_data_url <- function(raster) {
   paste0("data:image/png;base64,", base64enc::base64encode(png_path))
 }
 
+raster_png_raw <- function(raster, min_value = NULL, max_value = NULL) {
+  preview <- raster
+  values <- terra::values(preview, mat = TRUE)
+  rows <- terra::nrow(preview)
+  cols <- terra::ncol(preview)
+
+  if (!length(values) || ncell(preview) == 0 || all(is.na(values))) {
+    rgba <- array(0, dim = c(rows, cols, 4))
+  } else if (terra::nlyr(preview) >= 3) {
+    r <- matrix(normalize_band_with_range(values[, 1], min_value, max_value), nrow = rows, ncol = cols, byrow = TRUE)
+    g <- matrix(normalize_band_with_range(values[, 2], min_value, max_value), nrow = rows, ncol = cols, byrow = TRUE)
+    b <- matrix(normalize_band_with_range(values[, 3], min_value, max_value), nrow = rows, ncol = cols, byrow = TRUE)
+    a <- matrix(ifelse(is.finite(values[, 1]) & is.finite(values[, 2]) & is.finite(values[, 3]), 0.92, 0), nrow = rows, ncol = cols, byrow = TRUE)
+    rgba <- array(0, dim = c(rows, cols, 4))
+    rgba[, , 1] <- r[rows:1, ]
+    rgba[, , 2] <- g[rows:1, ]
+    rgba[, , 3] <- b[rows:1, ]
+    rgba[, , 4] <- a[rows:1, ]
+  } else {
+    band <- normalize_band_with_range(values[, 1], min_value, max_value)
+    r <- matrix(band, nrow = rows, ncol = cols, byrow = TRUE)
+    g <- matrix(pmin(1, 0.47 + band * 0.35), nrow = rows, ncol = cols, byrow = TRUE)
+    b <- matrix(1 - band, nrow = rows, ncol = cols, byrow = TRUE)
+    a <- matrix(ifelse(is.finite(values[, 1]), 0.88, 0), nrow = rows, ncol = cols, byrow = TRUE)
+    rgba <- array(0, dim = c(rows, cols, 4))
+    rgba[, , 1] <- r[rows:1, ]
+    rgba[, , 2] <- g[rows:1, ]
+    rgba[, , 3] <- b[rows:1, ]
+    rgba[, , 4] <- a[rows:1, ]
+  }
+
+  png_path <- tempfile(fileext = ".png")
+  png::writePNG(rgba, png_path)
+  readBin(png_path, "raw", n = file.info(png_path)$size)
+}
+
+valid_data_mask <- function(raster) {
+  mask <- raster[[1]]
+  mask_values <- terra::values(mask)
+  mask_values[is.finite(mask_values)] <- 1
+  mask_values[!is.finite(mask_values)] <- NA_real_
+  terra::values(mask) <- mask_values
+  mask
+}
+
+xyz_tile_extent <- function(z, x, y) {
+  world_span <- web_mercator_limit * 2
+  tiles_per_axis <- 2^z
+  tile_span <- world_span / tiles_per_axis
+  xmin <- -web_mercator_limit + x * tile_span
+  xmax <- xmin + tile_span
+  ymax <- web_mercator_limit - y * tile_span
+  ymin <- ymax - tile_span
+  terra::ext(xmin, xmax, ymin, ymax)
+}
+
+raster_tile_payload <- function(file_path, z, x, y) {
+  raster <- terra::rast(file_path)
+  if (!isTRUE(terra::same.crs(raster, display_raster_crs))) {
+    raster <- project_raster_for_display(raster, display_raster_crs, peninsular_raster_mask)
+  }
+  metadata <- raster_metadata(raster)
+
+  tile_ext <- xyz_tile_extent(z, x, y)
+  raster_ext <- terra::ext(raster)
+  intersects <- !(tile_ext$xmax <= raster_ext$xmin || tile_ext$xmin >= raster_ext$xmax || tile_ext$ymax <= raster_ext$ymin || tile_ext$ymin >= raster_ext$ymax)
+
+  tile_template <- terra::rast(tile_ext, ncols = raster_tile_size, nrows = raster_tile_size, crs = display_raster_crs)
+
+  if (!intersects) {
+    return(raster_png_raw(tile_template, metadata$min, metadata$max))
+  }
+
+  resample_method <- "near"
+  sampled <- tryCatch({
+    terra::resample(raster, tile_template, method = resample_method)
+  }, error = function(e) {
+    terra::project(raster, tile_template, method = resample_method)
+  })
+
+  mask_tile <- terra::resample(valid_data_mask(raster), tile_template, method = "near")
+  sampled <- terra::mask(sampled, mask_tile)
+
+  raster_png_raw(sampled, metadata$min, metadata$max)
+}
+
 raster_preview_payload <- function(file_path) {
   raster <- terra::rast(file_path)
+  if (!isTRUE(terra::same.crs(raster, display_raster_crs))) {
+    raster <- project_raster_for_display(raster, display_raster_crs, peninsular_raster_mask)
+  }
   list(
     image = raster_png_data_url(raster),
     coordinates = raster_wgs84_coordinates(raster),
@@ -817,7 +1014,16 @@ serve_static <- function(path) {
   }
   ext <- tolower(tools::file_ext(full_path))
   type <- switch(ext, html = "text/html; charset=utf-8", css = "text/css; charset=utf-8", js = "application/javascript; charset=utf-8", json = "application/json; charset=utf-8", "application/octet-stream")
-  list(status = 200, headers = list("Content-Type" = type), body = readBin(full_path, "raw", n = file.info(full_path)$size))
+  list(
+    status = 200,
+    headers = list(
+      "Content-Type" = type,
+      "Cache-Control" = "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma" = "no-cache",
+      "Expires" = "0"
+    ),
+    body = readBin(full_path, "raw", n = file.info(full_path)$size)
+  )
 }
 
 app <- list(
@@ -912,6 +1118,13 @@ app <- list(
         }
         if (!is.null(payload$visible)) layers[[idx]]$visible <- isTRUE(payload$visible)
         if (!is.null(payload$opacity)) layers[[idx]]$opacity <- as.numeric(payload$opacity)
+        if (!is.null(payload$name)) {
+          new_name <- trimws(as.character(payload$name))
+          if (!nzchar(new_name)) {
+            return(json_response(list(ok = FALSE, message = "El nombre de la capa no puede estar vacío."), 400))
+          }
+          layers[[idx]]$name <- new_name
+        }
         write_manifest(layers)
       }
       return(json_response(list(ok = TRUE, layers = filter_layers_for_role(layers, role))))
@@ -925,6 +1138,21 @@ app <- list(
       if (!file.exists(file_path)) return(json_response(list(error = "Sin archivo"), 404))
       return(text_response(paste(readLines(file_path, warn = FALSE, encoding = "UTF-8"), collapse = "\n"), "application/geo+json; charset=utf-8"))
     }
+    if (grepl("^/api/layers/[^/]+/tiles/[0-9]+/[0-9]+/[0-9]+\\.png$", path)) {
+      parts <- strsplit(path, "/", fixed = TRUE)[[1]]
+      id <- parts[[4]]
+      z <- as.integer(parts[[6]])
+      x <- as.integer(parts[[7]])
+      y <- as.integer(sub("\\.png$", "", parts[[8]]))
+      layers <- read_manifest()
+      idx <- match(id, vapply(layers, function(layer) layer$id, character(1)))
+      if (is.na(idx)) return(json_response(list(error = "No encontrada"), 404))
+      if (!identical(layers[[idx]]$type, "raster")) return(json_response(list(error = "No es raster"), 400))
+      file_path <- layer_file_path(layers[[idx]])
+      if (!file.exists(file_path)) return(json_response(list(error = "Sin archivo"), 404))
+      png_tile <- raster_tile_payload(file_path, z, x, y)
+      return(raw_response(png_tile, "image/png"))
+    }
     if (grepl("^/api/layers/[^/]+/data$", path)) {
       id <- sub("^/api/layers/([^/]+)/data$", "\\1", path)
       layers <- read_manifest()
@@ -936,6 +1164,35 @@ app <- list(
         return(json_response(raster_preview_payload(file_path)))
       }
       return(text_response(paste(readLines(file_path, warn = FALSE, encoding = "UTF-8"), collapse = "\n"), "application/geo+json; charset=utf-8"))
+    }
+    if (grepl("^/api/layers/[^/]+/download\\.csv$", path)) {
+      id <- sub("^/api/layers/([^/]+)/download\\.csv$", "\\1", path)
+      layers <- read_manifest()
+      idx <- match(id, vapply(layers, function(layer) layer$id, character(1)))
+      if (is.na(idx)) return(json_response(list(error = "No encontrada"), 404))
+      file_path <- layer_file_path(layers[[idx]])
+      if (!file.exists(file_path)) return(json_response(list(error = "Sin archivo"), 404))
+      if (identical(layers[[idx]]$type, "raster")) {
+        return(json_response(list(error = "El raster no se puede descargar como CSV de atributos."), 400))
+      }
+      safe_name <- gsub("[^A-Za-z0-9_-]+", "_", layers[[idx]]$name %||% layers[[idx]]$id)
+      data_sf <- sf::st_read(file_path, quiet = TRUE)
+      data_df <- sf::st_drop_geometry(data_sf)
+      csv_path <- tempfile(fileext = ".csv")
+      utils::write.csv(data_df, csv_path, row.names = FALSE, na = "")
+      return(download_response(csv_path, paste0(safe_name, ".csv"), "text/csv; charset=utf-8"))
+    }
+    if (grepl("^/api/layers/[^/]+/download$", path)) {
+      id <- sub("^/api/layers/([^/]+)/download$", "\\1", path)
+      layers <- read_manifest()
+      idx <- match(id, vapply(layers, function(layer) layer$id, character(1)))
+      if (is.na(idx)) return(json_response(list(error = "No encontrada"), 404))
+      file_path <- layer_file_path(layers[[idx]])
+      if (!file.exists(file_path)) return(json_response(list(error = "Sin archivo"), 404))
+      safe_name <- gsub("[^A-Za-z0-9_-]+", "_", layers[[idx]]$name %||% layers[[idx]]$id)
+      ext <- if (identical(layers[[idx]]$type, "raster")) ".tif" else ".geojson"
+      content_type <- if (identical(layers[[idx]]$type, "raster")) "image/tiff" else "application/geo+json"
+      return(download_response(file_path, paste0(safe_name, ext), content_type))
     }
 
     serve_static(path)

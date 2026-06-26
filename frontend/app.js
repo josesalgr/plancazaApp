@@ -6,6 +6,9 @@ const api = {
   layer: (id) => `/api/${encodeURIComponent(state.role)}/layers/${id}`,
   geojson: (id) => `/api/layers/${id}/geojson`,
   data: (id) => `/api/layers/${id}/data`,
+  download: (id) => `/api/layers/${id}/download`,
+  downloadCsv: (id) => `/api/layers/${id}/download.csv`,
+  rasterTiles: (id) => `/api/layers/${id}/tiles/{z}/{x}/{y}.png`,
   reorder: () => `/api/${encodeURIComponent(state.role)}/layers/reorder`,
 };
 
@@ -16,13 +19,14 @@ const state = {
   layerRuntime: {},
   baseLayers: {
     ccaa: { name: "CCAA", metaKey: "ccaaShapes", opacity: 0.72, visible: true, mapLayers: ["base-ccaa-fill", "base-ccaa-line"] },
-    provinces: { name: "Provincias", metaKey: "provinceShapes", opacity: 0.9, visible: true, mapLayers: ["base-provinces-fill", "base-provinces-line"] },
   },
-  layerOrder: JSON.parse(localStorage.getItem("plancaza_layer_order") || '["base:ccaa","base:provinces"]'),
+  layerOrder: JSON.parse(localStorage.getItem("plancaza_layer_order") || '["base:ccaa"]'),
   groups: JSON.parse(localStorage.getItem("plancaza_layer_groups") || "[]"),
   lang: localStorage.getItem("plancaza_lang") || "es",
   role: localStorage.getItem("plancaza_role") || "admin",
 };
+
+const FIXED_BASE_KEYS = new Set(["base:ccaa"]);
 
 const i18n = {
   es: {
@@ -99,6 +103,10 @@ const i18n = {
     groupNameUsed: "Ese nombre ya está en uso. Elige otro.",
     visualFieldLabel: "Visualiza",
     popupFieldsLabel: "Popup",
+    searchPlaceholder: "Buscar ciudad, pueblo o CCAA",
+    searchNoResults: "Sin resultados",
+    searchError: "No se pudo completar la búsqueda",
+    searchClear: "Limpiar búsqueda",
   },
   ca: {
     navInput: "Dades d'entrada",
@@ -174,6 +182,10 @@ const i18n = {
     groupNameUsed: "Aquest nom ja està en ús. Tria'n un altre.",
     visualFieldLabel: "Visualitza",
     popupFieldsLabel: "Popup",
+    searchPlaceholder: "Cerca ciutat, poble o CCAA",
+    searchNoResults: "Sense resultats",
+    searchError: "No s'ha pogut completar la cerca",
+    searchClear: "Netejar cerca",
   },
 };
 
@@ -190,6 +202,10 @@ const els = {
   fullscreenMap: document.querySelector("#fullscreenMap"),
   mapScale: document.querySelector("#mapScale"),
   mapStatus: document.querySelector("#mapStatus"),
+  mapSearch: document.querySelector("#mapSearch"),
+  mapSearchInput: document.querySelector("#mapSearchInput"),
+  mapSearchClear: document.querySelector("#mapSearchClear"),
+  mapSearchResults: document.querySelector("#mapSearchResults"),
   fileInput: document.querySelector("#fileInput"),
   dropZone: document.querySelector("#dropZone"),
   selectedFile: document.querySelector("#selectedFile"),
@@ -218,6 +234,25 @@ const els = {
   toast: document.querySelector("#toast"),
   mapShell: document.querySelector(".map-shell"),
   mapLegend: document.querySelector("#mapLegend"),
+  attributePanel: document.querySelector("#attributePanel"),
+  attributePanelTitle: document.querySelector("#attributePanelTitle"),
+  attributePanelSubtitle: document.querySelector("#attributePanelSubtitle"),
+  attributeTableWrap: document.querySelector("#attributeTableWrap"),
+  attributeSearchInput: document.querySelector("#attributeSearchInput"),
+  attributePageSize: document.querySelector("#attributePageSize"),
+  attributePrevPage: document.querySelector("#attributePrevPage"),
+  attributeNextPage: document.querySelector("#attributeNextPage"),
+  attributePageStatus: document.querySelector("#attributePageStatus"),
+  closeAttributePanel: document.querySelector("#closeAttributePanel"),
+  toggleAttributePanel: document.querySelector("#toggleAttributePanel"),
+  attributeResizeHandle: document.querySelector("#attributeResizeHandle"),
+  editAttributeTable: document.querySelector("#editAttributeTable"),
+  saveAttributeTable: document.querySelector("#saveAttributeTable"),
+  attributeZoomToSelection: document.querySelector("#attributeZoomToSelection"),
+  renameLayerDialog: document.querySelector("#renameLayerDialog"),
+  renameLayerInput: document.querySelector("#renameLayerInput"),
+  renameLayerWarning: document.querySelector("#renameLayerWarning"),
+  saveLayerRename: document.querySelector("#saveLayerRename"),
 };
 
 const map = new maplibregl.Map({
@@ -237,6 +272,28 @@ const map = new maplibregl.Map({
   center: [-3.7, 40.2],
   zoom: 4.8,
 });
+
+let searchAbortController = null;
+let searchDebounceTimer = null;
+let searchResults = [];
+let searchActiveIndex = -1;
+let openLayerMenuId = null;
+let renameLayerId = null;
+const attributeState = {
+  selectedLayerId: null,
+  layerId: null,
+  rows: [],
+  selectedFeatureIndex: null,
+  minimized: false,
+  editMode: false,
+  zoomToSelection: true,
+  height: 170,
+  sortColumn: "__row",
+  sortDirection: "asc",
+  search: "",
+  page: 1,
+  pageSize: 50,
+};
 
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-left");
 map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-left");
@@ -282,12 +339,403 @@ function toast(message) {
   window.setTimeout(() => els.toast.classList.remove("visible"), 2600);
 }
 
+function updateSearchClearVisibility() {
+  els.mapSearchClear.classList.toggle("is-hidden", !els.mapSearchInput.value.trim());
+}
+
+function collapseSearchResults() {
+  searchResults = [];
+  searchActiveIndex = -1;
+  els.mapSearchResults.innerHTML = "";
+  els.mapSearchResults.classList.add("is-hidden");
+}
+
+function searchLabelParts(item) {
+  const address = item.address || {};
+  const primary =
+    item.name ||
+    address.city ||
+    address.town ||
+    address.village ||
+    address.municipality ||
+    address.state ||
+    item.display_name?.split(",")[0] ||
+    "Lugar";
+
+  return {
+    primary,
+    secondary: item.display_name || "",
+  };
+}
+
+function renderSearchResults(items = []) {
+  searchResults = items;
+  searchActiveIndex = items.length ? 0 : -1;
+
+  if (!items.length) {
+    els.mapSearchResults.innerHTML = `<button type="button" class="map-search-result"><strong>${t("searchNoResults")}</strong></button>`;
+    els.mapSearchResults.classList.remove("is-hidden");
+    return;
+  }
+
+  els.mapSearchResults.innerHTML = items
+    .map((item, index) => {
+      const label = searchLabelParts(item);
+      return `
+        <button type="button" class="map-search-result ${index === searchActiveIndex ? "is-active" : ""}" data-index="${index}">
+          <strong>${sanitizeHtml(label.primary)}</strong>
+          <span>${sanitizeHtml(label.secondary)}</span>
+        </button>`;
+    })
+    .join("");
+  els.mapSearchResults.classList.remove("is-hidden");
+}
+
+function updateSearchActiveResult() {
+  const buttons = Array.from(els.mapSearchResults.querySelectorAll(".map-search-result[data-index]"));
+  buttons.forEach((button, index) => {
+    button.classList.toggle("is-active", index === searchActiveIndex);
+  });
+}
+
+function focusSearchResult(item) {
+  if (!item) return;
+
+  els.mapSearchInput.value = item.display_name || item.name || "";
+  updateSearchClearVisibility();
+  collapseSearchResults();
+
+  const bbox = item.boundingbox || [];
+  if (bbox.length === 4) {
+    const south = Number(bbox[0]);
+    const north = Number(bbox[1]);
+    const west = Number(bbox[2]);
+    const east = Number(bbox[3]);
+    if ([south, north, west, east].every(Number.isFinite)) {
+      map.fitBounds(
+        [
+          [west, south],
+          [east, north],
+        ],
+        { padding: 42, duration: 800, maxZoom: 12 }
+      );
+      return;
+    }
+  }
+
+  const lon = Number(item.lon);
+  const lat = Number(item.lat);
+  if (Number.isFinite(lon) && Number.isFinite(lat)) {
+    map.flyTo({ center: [lon, lat], zoom: 11, duration: 800 });
+  }
+}
+
+async function fetchSearchResults(query) {
+  if (searchAbortController) {
+    searchAbortController.abort();
+  }
+  searchAbortController = new AbortController();
+
+  const params = new URLSearchParams({
+    q: query,
+    format: "jsonv2",
+    addressdetails: "1",
+    countrycodes: "es",
+    dedupe: "1",
+    limit: "8",
+    "accept-language": state.lang === "ca" ? "ca,es" : "es,ca",
+  });
+
+  const response = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+    signal: searchAbortController.signal,
+    headers: { Accept: "application/json" },
+  });
+
+  if (!response.ok) {
+    throw new Error(t("searchError"));
+  }
+
+  const items = await response.json();
+  return Array.isArray(items) ? items : [];
+}
+
+async function runMapSearch(query) {
+  const trimmed = query.trim();
+  if (trimmed.length < 2) {
+    collapseSearchResults();
+    return;
+  }
+
+  try {
+    const results = await fetchSearchResults(trimmed);
+    renderSearchResults(results);
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    renderSearchResults([]);
+    toast(error.message || t("searchError"));
+  }
+}
+
 function updateVisibilityButton(button, visible) {
   if (!button) return;
   button.classList.toggle("is-visible", visible);
   button.classList.toggle("is-hidden-layer", !visible);
   button.setAttribute("aria-label", visible ? "Ocultar capa" : "Mostrar capa");
   button.title = visible ? "Ocultar capa" : "Mostrar capa";
+}
+
+function closeLayerMenus() {
+  openLayerMenuId = null;
+  renderLayers();
+}
+
+function attributeRowsFromGeojson(geojson) {
+  const features = Array.isArray(geojson.features) ? geojson.features : [];
+  return features.map((feature, index) => ({ __row: index + 1, __featureIndex: index, ...(feature.properties || {}) }));
+}
+
+function attributeColumnsFromRows(rows = []) {
+  const columns = new Set(["__row"]);
+  rows.forEach((row) => Object.keys(row).forEach((key) => columns.add(key)));
+  return Array.from(columns).filter((column) => column !== "__featureIndex");
+}
+
+function sortAttributeRows(rows = []) {
+  const column = attributeState.sortColumn || "__row";
+  const direction = attributeState.sortDirection === "desc" ? -1 : 1;
+  const sorted = [...rows];
+  sorted.sort((a, b) => {
+    const av = a[column];
+    const bv = b[column];
+    const an = Number(av);
+    const bn = Number(bv);
+    const bothNumeric = Number.isFinite(an) && Number.isFinite(bn) && `${av}` !== "" && `${bv}` !== "";
+    if (bothNumeric) return (an - bn) * direction;
+    return `${av ?? ""}`.localeCompare(`${bv ?? ""}`, undefined, { numeric: true, sensitivity: "base" }) * direction;
+  });
+  return sorted;
+}
+
+function filterAttributeRows(rows = []) {
+  const query = attributeState.search.trim().toLowerCase();
+  if (!query) return [...rows];
+  return rows.filter((row) =>
+    Object.entries(row).some(([key, value]) => key !== "__featureIndex" && `${value ?? ""}`.toLowerCase().includes(query))
+  );
+}
+
+function syncAttributePanelUi() {
+  els.attributePanel.classList.toggle("is-minimized", attributeState.minimized);
+  els.toggleAttributePanel.className = `group-toggle ${attributeState.minimized ? "is-collapsed" : "is-expanded"}`;
+  els.toggleAttributePanel.innerHTML = attributeState.minimized ? "&#9656;" : "&#9662;";
+  els.toggleAttributePanel.title = attributeState.minimized ? "Expandir tabla" : "Minimizar tabla";
+  els.toggleAttributePanel.setAttribute("aria-label", attributeState.minimized ? "Expandir tabla" : "Minimizar tabla");
+  els.editAttributeTable.classList.toggle("primary-action", attributeState.editMode);
+  els.saveAttributeTable.disabled = !attributeState.editMode;
+  els.attributeZoomToSelection.checked = attributeState.zoomToSelection;
+  els.attributePanel.style.height = attributeState.minimized ? "52px" : `${attributeState.height}px`;
+  els.attributeSearchInput.value = attributeState.search;
+  els.attributePageSize.value = `${attributeState.pageSize}`;
+}
+
+function renderAttributeTable(layer, rows = []) {
+  attributeState.selectedLayerId = layer?.id || attributeState.selectedLayerId;
+  attributeState.layerId = layer?.id || null;
+  attributeState.rows = rows.map((row) => ({ ...row }));
+  els.attributePanelTitle.textContent = "Tabla de atributos";
+  els.attributePanelSubtitle.textContent = layer?.name || "";
+  syncAttributePanelUi();
+
+  if (!rows.length) {
+    els.attributeTableWrap.innerHTML = '<div class="attribute-empty">Esta capa no tiene atributos tabulares disponibles.</div>';
+    els.attributePanel.classList.remove("is-hidden");
+    return;
+  }
+
+  const columns = attributeColumnsFromRows(rows);
+  const filteredRows = filterAttributeRows(attributeState.rows);
+  const sortedRows = sortAttributeRows(filteredRows);
+  const totalRows = sortedRows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / attributeState.pageSize));
+  attributeState.page = Math.min(Math.max(1, attributeState.page), totalPages);
+  const startIndex = (attributeState.page - 1) * attributeState.pageSize;
+  const endIndex = startIndex + attributeState.pageSize;
+  const displayRows = sortedRows.slice(startIndex, endIndex);
+  els.attributePageStatus.textContent = totalRows ? `${startIndex + 1}-${Math.min(endIndex, totalRows)} de ${totalRows}` : "0 resultados";
+  els.attributePrevPage.disabled = attributeState.page <= 1;
+  els.attributeNextPage.disabled = attributeState.page >= totalPages;
+  els.attributeTableWrap.innerHTML = `
+    <table class="attribute-table">
+      <thead>
+        <tr>${columns
+          .map((column) => `<th class="is-sortable ${attributeState.sortColumn === column ? `is-sorted-${attributeState.sortDirection}` : ""}" data-column="${sanitizeHtml(column)}">${sanitizeHtml(column === "__row" ? "#" : column)}</th>`)
+          .join("")}</tr>
+      </thead>
+      <tbody>
+        ${displayRows
+          .map(
+            (row) => `<tr data-feature-index="${row.__featureIndex}" class="${attributeState.selectedFeatureIndex === row.__featureIndex ? "is-selected" : ""}">${columns
+              .map((column) => {
+                const editable = attributeState.editMode && column !== "__row";
+                return `<td class="${editable ? "is-editing" : ""}" data-column="${sanitizeHtml(column)}" ${editable ? 'contenteditable="true"' : ""}>${sanitizeHtml(row[column] ?? "")}</td>`;
+              })
+              .join("")}</tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+  els.attributePanel.classList.remove("is-hidden");
+}
+
+function focusFeatureRow(layerId, rowIndex) {
+  const feature = state.layerRuntime[layerId]?.geojson?.features?.[rowIndex];
+  if (!feature?.geometry) return;
+  showHighlightedFeature(feature);
+  const geometryType = feature.geometry.type || "";
+  if (geometryType === "Point") {
+    const [lon, lat] = feature.geometry.coordinates || [];
+    if (Number.isFinite(lon) && Number.isFinite(lat)) {
+      map.flyTo({ center: [lon, lat], zoom: 11, duration: 700 });
+    }
+    return;
+  }
+  const bounds = boundsFromGeojsonGeometry(feature.geometry);
+  if (bounds) {
+    focusBounds(bounds, { maxZoom: 12 });
+  }
+}
+
+function ensureFeatureHighlightLayers() {
+  if (!map.getSource("feature-highlight")) {
+    map.addSource("feature-highlight", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+  }
+
+  if (!map.getLayer("feature-highlight-fill")) {
+    map.addLayer({
+      id: "feature-highlight-fill",
+      type: "fill",
+      source: "feature-highlight",
+      filter: ["==", ["geometry-type"], "Polygon"],
+      paint: {
+        "fill-color": "#ffd166",
+        "fill-opacity": 0.12,
+      },
+    });
+  }
+
+  if (!map.getLayer("feature-highlight-line")) {
+    map.addLayer({
+      id: "feature-highlight-line",
+      type: "line",
+      source: "feature-highlight",
+      filter: [
+        "any",
+        ["==", ["geometry-type"], "Polygon"],
+        ["==", ["geometry-type"], "LineString"],
+      ],
+      paint: {
+        "line-color": "#ff7f11",
+        "line-width": 3,
+      },
+    });
+  }
+
+  if (!map.getLayer("feature-highlight-circle")) {
+    map.addLayer({
+      id: "feature-highlight-circle",
+      type: "circle",
+      source: "feature-highlight",
+      filter: ["==", ["geometry-type"], "Point"],
+      paint: {
+        "circle-radius": 7,
+        "circle-color": "#ffd166",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#ff7f11",
+      },
+    });
+  }
+}
+
+function showHighlightedFeature(feature) {
+  ensureFeatureHighlightLayers();
+  const source = map.getSource("feature-highlight");
+  source?.setData({
+    type: "FeatureCollection",
+    features: [{ type: "Feature", properties: feature.properties || {}, geometry: feature.geometry }],
+  });
+}
+
+async function revealFeatureInAttributeTable(layerId, featureIndex) {
+  if (els.attributePanel.classList.contains("is-hidden")) return;
+
+  if (attributeState.layerId !== layerId) {
+    await openAttributeTable(layerId);
+  }
+
+  const layer = state.layers.find((item) => item.id === layerId);
+  if (!layer) return;
+
+  let rows = attributeState.rows;
+  let filteredRows = filterAttributeRows(rows);
+  if (!filteredRows.some((row) => row.__featureIndex === featureIndex)) {
+    attributeState.search = "";
+    filteredRows = [...rows];
+  }
+
+  const sortedRows = sortAttributeRows(filteredRows);
+  const rowPosition = sortedRows.findIndex((row) => row.__featureIndex === featureIndex);
+  if (rowPosition < 0) return;
+
+  attributeState.selectedFeatureIndex = featureIndex;
+  attributeState.page = Math.floor(rowPosition / attributeState.pageSize) + 1;
+  renderAttributeTable(layer, rows);
+
+  requestAnimationFrame(() => {
+    const row = els.attributeTableWrap.querySelector(`tr[data-feature-index="${featureIndex}"]`);
+    row?.scrollIntoView({ block: "nearest" });
+  });
+}
+
+async function openAttributeTable(layerId) {
+  const layer = state.layers.find((item) => item.id === layerId);
+  if (!layer) return;
+  attributeState.selectedLayerId = layerId;
+  attributeState.editMode = false;
+  attributeState.selectedFeatureIndex = null;
+  attributeState.minimized = false;
+  attributeState.sortColumn = "__row";
+  attributeState.sortDirection = "asc";
+  attributeState.search = "";
+  attributeState.page = 1;
+
+  if (layer.type === "raster") {
+    renderAttributeTable(layer, []);
+    return;
+  }
+
+  const cached = state.layerRuntime[layerId]?.attributeRows;
+  if (cached) {
+    renderAttributeTable(layer, cached);
+    return;
+  }
+
+  const geojson = annotateGeojsonFeatures(JSON.parse(await requestText(api.data(layerId))));
+  const rows = attributeRowsFromGeojson(geojson);
+  state.layerRuntime[layerId] = { ...(state.layerRuntime[layerId] || {}), attributeRows: rows, geojson };
+  renderAttributeTable(layer, rows);
+}
+
+function openRenameLayerDialog(layer) {
+  renameLayerId = layer.id;
+  els.renameLayerWarning.textContent = "";
+  els.renameLayerInput.value = layer.name || "";
+  els.renameLayerDialog.showModal();
+  els.renameLayerInput.focus();
+  els.renameLayerInput.select();
 }
 
 function applyLanguage() {
@@ -308,6 +756,9 @@ function applyLanguage() {
   }
   document.querySelector("#groupDialog")?._syncGroupDialogText?.();
   document.querySelector("#groupDialog")?._validateGroupDialog?.();
+  els.mapSearchInput.placeholder = t("searchPlaceholder");
+  els.mapSearchClear.title = t("searchClear");
+  els.mapSearchClear.setAttribute("aria-label", t("searchClear"));
   renderLayers();
 }
 
@@ -327,22 +778,6 @@ async function requestText(url) {
   const response = await fetch(url);
   if (!response.ok) throw new Error("No se pudo cargar el recurso.");
   return response.text();
-}
-
-function colorExpression() {
-  return [
-    "interpolate",
-    ["linear"],
-    ["coalesce", ["get", "value"], 0],
-    35,
-    "#d67b5b",
-    45,
-    "#e0c16f",
-    55,
-    "#6b9b7a",
-    65,
-    "#2f6f73",
-  ];
 }
 
 const categoryPalette = ["#d67b5b", "#e0c16f", "#6b9b7a", "#2f6f73", "#7d8cc4", "#b07aa1", "#5a9367", "#c97f52"];
@@ -488,10 +923,7 @@ function thematicStyle(layer, geojson, geometryType) {
 }
 
 async function loadBaseLayers() {
-  const [ccaa, provinces] = await Promise.all([
-    requestText(api.base("ccaa")).then(JSON.parse),
-    requestText(api.base("provinces")).then(JSON.parse),
-  ]);
+  const ccaa = await requestText(api.base("ccaa")).then(JSON.parse);
 
   if (map.getSource("base-ccaa")) {
     map.getSource("base-ccaa").setData(ccaa);
@@ -502,7 +934,7 @@ async function loadBaseLayers() {
       type: "fill",
       source: "base-ccaa",
       paint: {
-        "fill-color": colorExpression(),
+        "fill-color": "#d9e2df",
         "fill-opacity": state.baseLayers.ccaa.opacity,
       },
     });
@@ -516,32 +948,6 @@ async function loadBaseLayers() {
       },
     });
   }
-
-  if (map.getSource("base-provinces")) {
-    map.getSource("base-provinces").setData(provinces);
-  } else {
-    map.addSource("base-provinces", { type: "geojson", data: provinces });
-    map.addLayer({
-      id: "base-provinces-fill",
-      type: "fill",
-      source: "base-provinces",
-      paint: {
-        "fill-color": "#ffffff",
-        "fill-opacity": 0,
-      },
-    });
-    map.addLayer({
-      id: "base-provinces-line",
-      type: "line",
-      source: "base-provinces",
-      paint: {
-        "line-color": "#111827",
-        "line-opacity": state.baseLayers.provinces.opacity,
-        "line-width": 0.85,
-        "line-dasharray": [2, 1],
-      },
-    });
-  }
 }
 
 function removeMapLayer(id) {
@@ -551,6 +957,24 @@ function removeMapLayer(id) {
   }
   if (map.getSource(id)) map.removeSource(id);
   delete state.layerRuntime[id.replace(/^user-/, "")];
+}
+
+function cleanupStaleUserLayers() {
+  const activeSourceIds = new Set(state.layers.map((layer) => `user-${layer.id}`));
+  const style = map.getStyle?.();
+  const sourceIds = Object.keys(style?.sources || {}).filter((id) => id.startsWith("user-"));
+  for (const sourceId of sourceIds) {
+    if (!activeSourceIds.has(sourceId)) {
+      removeMapLayer(sourceId);
+    }
+  }
+
+  for (const layerId of Object.keys(state.layerRuntime || {})) {
+    const sourceId = `user-${layerId}`;
+    if (!activeSourceIds.has(sourceId)) {
+      delete state.layerRuntime[layerId];
+    }
+  }
 }
 
 function extendBounds(bounds, lng, lat) {
@@ -573,6 +997,29 @@ function boundsFromCoordinates(coordinates = []) {
     }
   }
   return bounds;
+}
+
+function boundsFromMetadata(metadata = {}) {
+  const bbox = metadata.bounds_wgs84 || metadata.bbox || {};
+  const xmin = Number(bbox.xmin);
+  const ymin = Number(bbox.ymin);
+  const xmax = Number(bbox.xmax);
+  const ymax = Number(bbox.ymax);
+  if (![xmin, ymin, xmax, ymax].every(Number.isFinite)) return null;
+  return [xmin, ymin, xmax, ymax];
+}
+
+function annotateGeojsonFeatures(geojson = {}) {
+  return {
+    ...geojson,
+    features: (geojson.features || []).map((feature, index) => ({
+      ...feature,
+      properties: {
+        ...(feature.properties || {}),
+        __featureIndex: index,
+      },
+    })),
+  };
 }
 
 function normalizeImageCoordinates(coordinates = []) {
@@ -640,10 +1087,10 @@ async function drawLayer(layer) {
   const visible = layer.visible === false ? "none" : "visible";
 
   if (layer.type === "raster") {
-    const raster = JSON.parse(await requestText(api.data(layer.id)));
+    const raster = await requestJson(api.data(layer.id));
     const imageCoordinates = normalizeImageCoordinates(raster.coordinates);
     state.layerRuntime[layer.id] = {
-      bounds: boundsFromCoordinates(imageCoordinates),
+      bounds: boundsFromMetadata(raster.metadata) || boundsFromCoordinates(imageCoordinates),
       legend: rasterLegend(raster.metadata || {}),
     };
     map.addSource(sourceId, {
@@ -661,12 +1108,12 @@ async function drawLayer(layer) {
     return;
   }
 
-  const geojson = JSON.parse(await requestText(api.data(layer.id)));
+  const geojson = annotateGeojsonFeatures(JSON.parse(await requestText(api.data(layer.id))));
   map.addSource(sourceId, { type: "geojson", data: geojson });
 
   const firstGeometry = geojson.features?.find((feature) => feature.geometry)?.geometry?.type || "";
   const style = thematicStyle(layer, geojson, firstGeometry);
-  state.layerRuntime[layer.id] = { legend: style, bounds: boundsFromGeojson(geojson) };
+  state.layerRuntime[layer.id] = { legend: style, bounds: boundsFromGeojson(geojson), geojson };
 
   if (firstGeometry.includes("Polygon")) {
     map.addLayer({
@@ -708,7 +1155,22 @@ async function drawLayer(layer) {
   }
 }
 
+function layerIdFromRenderedFeature(feature) {
+  const layerId = feature?.layer?.id || "";
+  const match = layerId.match(/^user-(.+?)-(fill|line|circle|raster)$/);
+  return match ? match[1] : null;
+}
+
+function originalFeatureFromRenderedFeature(feature) {
+  const layerId = layerIdFromRenderedFeature(feature);
+  const featureIndex = Number(feature?.properties?.__featureIndex);
+  if (!layerId || !Number.isInteger(featureIndex)) return feature;
+  const original = state.layerRuntime[layerId]?.geojson?.features?.[featureIndex];
+  return original ? { ...original, properties: original.properties || {} } : feature;
+}
+
 async function redrawUserLayers(focusId = null) {
+  cleanupStaleUserLayers();
   for (const layer of state.layers) removeMapLayer(`user-${layer.id}`);
   for (const layer of [...state.layers].reverse()) await drawLayer(layer);
   applyMapOrder();
@@ -732,7 +1194,7 @@ function renderLayers() {
       <div class="layer-row">
         <button type="button" class="visibility-toggle ${layer.visible === false ? "is-hidden-layer" : "is-visible"}" data-action="visible" aria-label="${layer.visible === false ? "Mostrar capa" : "Ocultar capa"}"></button>
         <span class="layer-glyph">▧</span>
-        <strong title="${layer.name}">${layer.name}</strong>
+        <strong title="${sanitizeHtml(layer.name)}">${sanitizeHtml(layer.name)}</strong>
         <span class="pill">${layer.type.toUpperCase()}</span>
         <span class="layer-tools">
           <button class="layer-tool" data-action="up" title="Subir capa">↑</button>
@@ -770,7 +1232,7 @@ function layerKey(layer) {
 function validTopLevelKeys() {
   const userKeys = new Set(state.layers.map(layerKey));
   const groupKeys = new Set(state.groups.map((group) => `group:${group.id}`));
-  return new Set(["base:ccaa", "base:provinces", ...userKeys, ...groupKeys]);
+  return new Set(["base:ccaa", ...userKeys, ...groupKeys]);
 }
 
 function syncLayerOrder() {
@@ -778,11 +1240,11 @@ function syncLayerOrder() {
   const grouped = new Set();
   state.groups.forEach((group) => {
     group.category = normalizeGroupCategory(group.category);
-    group.items = (group.items || []).filter((key) => valid.has(key) && !key.startsWith("group:"));
+    group.items = (group.items || []).filter((key) => valid.has(key) && !key.startsWith("group:") && !FIXED_BASE_KEYS.has(key));
     group.items.forEach((key) => grouped.add(key));
   });
   state.layerOrder = state.layerOrder.filter((key) => valid.has(key) && !grouped.has(key));
-  for (const key of ["base:ccaa", "base:provinces", ...state.groups.map((group) => `group:${group.id}`), ...state.layers.map(layerKey)]) {
+  for (const key of ["base:ccaa", ...state.groups.map((group) => `group:${group.id}`), ...state.layers.map(layerKey)]) {
     if (valid.has(key) && !grouped.has(key) && !state.layerOrder.includes(key)) state.layerOrder.push(key);
   }
   storageSet();
@@ -804,7 +1266,6 @@ function flattenedLayerKeys() {
 
 function mapLayerIdsForKey(key) {
   if (key === "base:ccaa") return state.baseLayers.ccaa.mapLayers;
-  if (key === "base:provinces") return state.baseLayers.provinces.mapLayers;
   if (key.startsWith("user:")) {
     const id = key.replace("user:", "");
     return [`user-${id}-raster`, `user-${id}-fill`, `user-${id}-line`, `user-${id}-circle`];
@@ -834,9 +1295,8 @@ function dragHandle() {
 function renderBaseCard(kind) {
   const base = state.baseLayers[kind];
   return `
-    <article class="layer-card base-card" draggable="true" data-key="base:${kind}">
-      <div class="layer-row">
-        ${dragHandle()}
+    <article class="layer-card base-card is-locked" data-key="base:${kind}">
+      <div class="layer-row base-row">
         <button type="button" class="visibility-toggle ${base.visible ? "is-visible" : "is-hidden-layer"}" data-action="base-visible" aria-label="${base.visible ? "Ocultar capa" : "Mostrar capa"}"></button>
         <strong>${base.name}</strong>
         <span class="pill">BASE</span>
@@ -851,25 +1311,38 @@ function renderBaseCard(kind) {
 }
 
 function renderUserCard(layer) {
-  const popupFields = layer.popup_fields?.length ? layer.popup_fields.join(", ") : (layer.metadata?.fields || []).join(", ");
+  const menuOpen = openLayerMenuId === layer.id;
+  const selected = attributeState.selectedLayerId === layer.id;
+  const isRaster = layer.type === "raster";
   return `
-    <article class="layer-card ${canEditLayer(layer) ? "" : "is-locked"}" draggable="true" data-key="user:${layer.id}" data-id="${layer.id}">
+    <article class="layer-card ${canEditLayer(layer) ? "" : "is-locked"} ${selected ? "is-selected" : ""}" draggable="true" data-key="user:${layer.id}" data-id="${layer.id}">
       <div class="layer-row">
         ${dragHandle()}
         <button type="button" class="visibility-toggle ${layer.visible === false ? "is-hidden-layer" : "is-visible"}" data-action="visible" aria-label="${layer.visible === false ? "Mostrar capa" : "Ocultar capa"}"></button>
-        <strong title="${layer.name}">${layer.name}</strong>
+        <strong title="${sanitizeHtml(layer.name)}">${sanitizeHtml(layer.name)}</strong>
         <span class="pill">${layer.type.toUpperCase()}</span>
         <span class="layer-tools">
           <button class="layer-tool delete" data-action="delete" title="Eliminar capa">×</button>
         </span>
       </div>
-      <small>${layerTypeLabel(layer)}</small>
-      <small>${t("visualFieldLabel")}: ${layer.display_field || t("displayFieldAuto")}</small>
-      <small>${t("popupFieldsLabel")}: ${popupFields || "-"}</small>
       <label class="opacity-row">
         <span class="opacity-label">${t("opacity")}</span>
         <input type="range" min="0" max="1" step="0.05" value="${layer.opacity ?? 0.65}" data-action="opacity" />
       </label>
+      <div class="layer-menu-row">
+        <button type="button" class="layer-icon-button layer-table-button" data-action="open-attributes" title="Abrir tabla de atributos" aria-label="Abrir tabla de atributos"></button>
+        <button type="button" class="layer-icon-button layer-zoom-button" data-action="focus-layer" title="Zoom a la capa" aria-label="Zoom a la capa"></button>
+        <button type="button" class="layer-menu-toggle ${menuOpen ? "is-open" : ""}" data-action="layer-menu-toggle" title="Opciones de capa">...</button>
+        ${menuOpen ? `
+          <div class="layer-dropdown">
+            <button type="button" data-action="rename">Renombrar</button>
+            <div class="layer-dropdown-group">
+              <span class="layer-dropdown-label">Descargar</span>
+              <button type="button" data-action="download-geojson">${isRaster ? "GeoTIFF" : "GeoJSON"}</button>
+              ${isRaster ? "" : '<button type="button" data-action="download-csv">CSV atributos</button>'}
+            </div>
+          </div>` : ""}
+      </div>
     </article>
   `;
 }
@@ -928,7 +1401,6 @@ function renderGroupCardV2(group) {
 
 function renderLayerKey(key) {
   if (key === "base:ccaa") return renderBaseCard("ccaa");
-  if (key === "base:provinces") return renderBaseCard("provinces");
   if (key.startsWith("group:")) {
     const group = state.groups.find((item) => `group:${item.id}` === key);
     return group ? renderGroupCardV2(group) : "";
@@ -1413,7 +1885,7 @@ document.addEventListener("fullscreenchange", () => {
 });
 
 function setBaseLayerVisibility(kind, visible) {
-  const ids = kind === "ccaa" ? ["base-ccaa-fill", "base-ccaa-line"] : ["base-provinces-fill", "base-provinces-line"];
+  const ids = ["base-ccaa-fill", "base-ccaa-line"];
   const visibility = visible ? "visible" : "none";
   for (const id of ids) {
     if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", visibility);
@@ -1583,6 +2055,245 @@ els.displayFieldSelect.addEventListener("change", () => {
   validateLayerDialog();
 });
 
+els.mapSearchInput.addEventListener("input", () => {
+  updateSearchClearVisibility();
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    runMapSearch(els.mapSearchInput.value);
+  }, 220);
+});
+
+els.mapSearchInput.addEventListener("focus", () => {
+  updateSearchClearVisibility();
+  if (els.mapSearchInput.value.trim().length >= 2 && searchResults.length) {
+    els.mapSearchResults.classList.remove("is-hidden");
+  }
+});
+
+els.mapSearchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    collapseSearchResults();
+    return;
+  }
+
+  if (!searchResults.length) return;
+
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    searchActiveIndex = (searchActiveIndex + 1) % searchResults.length;
+    updateSearchActiveResult();
+    return;
+  }
+
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    searchActiveIndex = (searchActiveIndex - 1 + searchResults.length) % searchResults.length;
+    updateSearchActiveResult();
+    return;
+  }
+
+  if (event.key === "Enter" && searchActiveIndex >= 0) {
+    event.preventDefault();
+    focusSearchResult(searchResults[searchActiveIndex]);
+  }
+});
+
+els.mapSearchClear.addEventListener("click", () => {
+  els.mapSearchInput.value = "";
+  updateSearchClearVisibility();
+  collapseSearchResults();
+  els.mapSearchInput.focus();
+});
+
+els.mapSearchResults.addEventListener("click", (event) => {
+  const button = event.target.closest(".map-search-result[data-index]");
+  if (!button) return;
+  const index = Number(button.dataset.index);
+  if (!Number.isInteger(index) || !searchResults[index]) return;
+  focusSearchResult(searchResults[index]);
+});
+
+document.addEventListener("click", (event) => {
+  if (els.mapSearch.contains(event.target)) return;
+  collapseSearchResults();
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".layer-menu-row")) return;
+  if (openLayerMenuId !== null) {
+    openLayerMenuId = null;
+    renderLayers();
+  }
+});
+
+els.layerTree.addEventListener("click", async (event) => {
+  const card = event.target.closest(".layer-card[data-id]");
+  if (!card) return;
+  if (event.target.closest("[data-action]") || event.target.closest("input[type='range']") || event.target.closest(".drag-handle")) return;
+  attributeState.selectedLayerId = card.dataset.id;
+  if (!els.attributePanel.classList.contains("is-hidden")) {
+    try {
+      await openAttributeTable(card.dataset.id);
+    } catch (error) {
+      toast(error.message || "No se pudo actualizar la tabla de atributos.");
+    }
+  }
+  renderLayers();
+});
+
+els.closeAttributePanel.addEventListener("click", () => {
+  els.attributePanel.classList.add("is-hidden");
+  els.attributeTableWrap.innerHTML = "";
+  els.attributePanelSubtitle.textContent = "";
+  attributeState.layerId = null;
+  attributeState.rows = [];
+  attributeState.selectedFeatureIndex = null;
+  attributeState.editMode = false;
+  attributeState.minimized = false;
+  syncAttributePanelUi();
+  renderLayers();
+});
+
+els.toggleAttributePanel.addEventListener("click", () => {
+  attributeState.minimized = !attributeState.minimized;
+  syncAttributePanelUi();
+});
+
+els.editAttributeTable.addEventListener("click", () => {
+  if (!attributeState.layerId || !attributeState.rows.length) return;
+  attributeState.editMode = !attributeState.editMode;
+  const layer = state.layers.find((item) => item.id === attributeState.layerId);
+  renderAttributeTable(layer, attributeState.rows);
+});
+
+els.saveAttributeTable.addEventListener("click", () => {
+  if (!attributeState.editMode) return;
+  attributeState.editMode = false;
+  const layer = state.layers.find((item) => item.id === attributeState.layerId);
+  renderAttributeTable(layer, attributeState.rows);
+  toast("Cambios guardados en la sesión. El guardado persistente lo conectamos en el siguiente paso.");
+});
+
+els.attributeZoomToSelection.addEventListener("change", () => {
+  attributeState.zoomToSelection = els.attributeZoomToSelection.checked;
+});
+
+els.attributeSearchInput.addEventListener("input", () => {
+  attributeState.search = els.attributeSearchInput.value;
+  attributeState.page = 1;
+  const layer = state.layers.find((item) => item.id === attributeState.layerId);
+  if (layer) renderAttributeTable(layer, attributeState.rows);
+});
+
+els.attributePrevPage.addEventListener("click", () => {
+  if (attributeState.page <= 1) return;
+  attributeState.page -= 1;
+  const layer = state.layers.find((item) => item.id === attributeState.layerId);
+  if (layer) renderAttributeTable(layer, attributeState.rows);
+});
+
+els.attributeNextPage.addEventListener("click", () => {
+  attributeState.page += 1;
+  const layer = state.layers.find((item) => item.id === attributeState.layerId);
+  if (layer) renderAttributeTable(layer, attributeState.rows);
+});
+
+let attributeResizeSession = null;
+
+els.attributeResizeHandle.addEventListener("mousedown", (event) => {
+  if (attributeState.minimized) return;
+  attributeResizeSession = {
+    startY: event.clientY,
+    startHeight: attributeState.height,
+  };
+  document.body.style.userSelect = "none";
+});
+
+document.addEventListener("mousemove", (event) => {
+  if (!attributeResizeSession) return;
+  const delta = attributeResizeSession.startY - event.clientY;
+  const next = Math.max(92, Math.min(Math.round(window.innerHeight * 0.7), attributeResizeSession.startHeight + delta));
+  attributeState.height = next;
+  syncAttributePanelUi();
+});
+
+document.addEventListener("mouseup", () => {
+  if (!attributeResizeSession) return;
+  attributeResizeSession = null;
+  document.body.style.userSelect = "";
+});
+
+els.attributeTableWrap.addEventListener("click", (event) => {
+  const header = event.target.closest("th[data-column]");
+  if (header) {
+    const column = header.dataset.column;
+    if (attributeState.sortColumn === column) {
+      attributeState.sortDirection = attributeState.sortDirection === "asc" ? "desc" : "asc";
+    } else {
+      attributeState.sortColumn = column;
+      attributeState.sortDirection = "asc";
+    }
+    const layer = state.layers.find((item) => item.id === attributeState.layerId);
+    renderAttributeTable(layer, attributeState.rows);
+    return;
+  }
+
+  const row = event.target.closest("tr[data-feature-index]");
+  if (!row) return;
+  const featureIndex = Number(row.dataset.featureIndex);
+  if (!Number.isInteger(featureIndex)) return;
+  attributeState.selectedFeatureIndex = featureIndex;
+  row.closest("tbody")?.querySelectorAll("tr").forEach((item) => item.classList.remove("is-selected"));
+  row.classList.add("is-selected");
+  if (attributeState.zoomToSelection && attributeState.layerId) {
+    focusFeatureRow(attributeState.layerId, featureIndex);
+  }
+});
+
+els.attributeTableWrap.addEventListener("input", (event) => {
+  const cell = event.target.closest("td[contenteditable='true']");
+  const row = event.target.closest("tr[data-feature-index]");
+  if (!cell || !row) return;
+  const featureIndex = Number(row.dataset.featureIndex);
+  const column = cell.dataset.column;
+  if (!Number.isInteger(featureIndex) || !column) return;
+  const targetRow = attributeState.rows.find((item) => item.__featureIndex === featureIndex);
+  if (!targetRow) return;
+  targetRow[column] = cell.textContent.trim();
+});
+
+els.attributeTableWrap.addEventListener("change", (event) => {
+  const pageSizeSelect = event.target.closest("#attributePageSize");
+  if (!pageSizeSelect) return;
+  attributeState.pageSize = Number(pageSizeSelect.value) || 50;
+  attributeState.page = 1;
+  const layer = state.layers.find((item) => item.id === attributeState.layerId);
+  renderAttributeTable(layer, attributeState.rows);
+});
+
+els.saveLayerRename.addEventListener("click", async (event) => {
+  event.preventDefault();
+  const layer = state.layers.find((item) => item.id === renameLayerId);
+  if (!layer) {
+    els.renameLayerDialog.close();
+    return;
+  }
+  const name = els.renameLayerInput.value.trim();
+  if (!name) {
+    els.renameLayerWarning.textContent = "Pon un nombre para la capa.";
+    return;
+  }
+  await requestJson(api.layer(layer.id), { method: "POST", body: JSON.stringify({ role: state.role, name }) });
+  layer.name = name;
+  els.renameLayerDialog.close();
+  renameLayerId = null;
+  renderLayers();
+});
+
+els.renameLayerDialog.addEventListener("close", () => {
+  els.renameLayerWarning.textContent = "";
+});
+
 els.csvMode.addEventListener("change", async () => {
   const file = els.fileInput.files?.[0];
   if (!file || uploadKind(file) !== "csv") {
@@ -1750,7 +2461,6 @@ async function setGroupOpacity(group, opacity) {
       const kind = key.replace("base:", "");
       state.baseLayers[kind].opacity = opacity;
       if (kind === "ccaa" && map.getLayer("base-ccaa-fill")) map.setPaintProperty("base-ccaa-fill", "fill-opacity", opacity);
-      if (kind === "provinces" && map.getLayer("base-provinces-line")) map.setPaintProperty("base-provinces-line", "line-opacity", opacity);
     }
     if (key.startsWith("user:")) {
       const id = key.replace("user:", "");
@@ -1832,7 +2542,6 @@ els.layerTree.addEventListener("input", async (event) => {
     const value = Number(event.target.value);
     state.baseLayers[kind].opacity = value;
     if (kind === "ccaa" && map.getLayer("base-ccaa-fill")) map.setPaintProperty("base-ccaa-fill", "fill-opacity", value);
-    if (kind === "provinces" && map.getLayer("base-provinces-line")) map.setPaintProperty("base-provinces-line", "line-opacity", value);
   }
 
   if (event.target.dataset.action === "group-opacity") {
@@ -1851,12 +2560,67 @@ els.uploadedLayers.addEventListener("click", async (event) => {
   if (index < 0) return;
   const action = button.dataset.action;
 
+  if (action === "layer-menu-toggle") {
+    openLayerMenuId = openLayerMenuId === id ? null : id;
+    renderLayers();
+    return;
+  }
+
+  if (action === "rename") {
+    openLayerMenuId = null;
+    renderLayers();
+    openRenameLayerDialog(state.layers[index]);
+    return;
+  }
+
+  if (action === "open-attributes") {
+    openLayerMenuId = null;
+    renderLayers();
+    try {
+      await openAttributeTable(id);
+      renderLayers();
+    } catch (error) {
+      toast(error.message || "No se pudo abrir la tabla de atributos.");
+    }
+    return;
+  }
+
+  if (action === "download-geojson") {
+    openLayerMenuId = null;
+    renderLayers();
+    window.open(api.download(id), "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  if (action === "download-csv") {
+    openLayerMenuId = null;
+    renderLayers();
+    window.open(api.downloadCsv(id), "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  if (action === "focus-layer") {
+    focusLayerById(id);
+    return;
+  }
+
   if (action === "delete") {
     if (!canEditLayer(state.layers[index])) {
       toast("Solo admin puede eliminar capas comunes.");
       return;
     }
     await fetch(api.layer(id), { method: "DELETE" });
+    if (attributeState.layerId === id) {
+      els.attributePanel.classList.add("is-hidden");
+      els.attributeTableWrap.innerHTML = "";
+      els.attributePanelSubtitle.textContent = "";
+      attributeState.layerId = null;
+      attributeState.rows = [];
+      attributeState.selectedFeatureIndex = null;
+      attributeState.editMode = false;
+      attributeState.minimized = false;
+      syncAttributePanelUi();
+    }
     await loadLayers();
   }
   if (action === "up" && index > 0) {
@@ -1949,7 +2713,7 @@ async function persistUserOrder() {
 els.layerTree.addEventListener("dragstart", (event) => {
   const handle = event.target.closest(".drag-handle");
   const card = event.target.closest(".layer-card[data-key]");
-  if (!handle || !card) {
+  if (!handle || !card || FIXED_BASE_KEYS.has(card.dataset.key)) {
     event.preventDefault();
     return;
   }
@@ -1965,7 +2729,7 @@ els.layerTree.addEventListener("dragend", () => {
 
 els.layerTree.addEventListener("dragover", (event) => {
   const card = event.target.closest(".layer-card[data-key]");
-  if (!card || !draggingKey) return;
+  if (!card || !draggingKey || FIXED_BASE_KEYS.has(draggingKey) || FIXED_BASE_KEYS.has(card.dataset.key)) return;
   event.preventDefault();
   card.classList.add("drop-target");
 });
@@ -1977,7 +2741,7 @@ els.layerTree.addEventListener("dragleave", (event) => {
 
 els.layerTree.addEventListener("drop", async (event) => {
   const card = event.target.closest(".layer-card[data-key]");
-  if (!draggingKey) return;
+  if (!draggingKey || FIXED_BASE_KEYS.has(draggingKey)) return;
   event.preventDefault();
 
   if (!card) {
@@ -1985,6 +2749,7 @@ els.layerTree.addEventListener("drop", async (event) => {
     state.layerOrder.push(draggingKey);
   } else {
     const targetKey = card.dataset.key;
+    if (FIXED_BASE_KEYS.has(targetKey)) return;
     const rect = card.getBoundingClientRect();
     const insertAfter = event.clientY > rect.top + rect.height / 2;
     if (targetKey !== draggingKey && !draggingKey.startsWith("group:")) {
@@ -2013,6 +2778,7 @@ els.layerTree.addEventListener("drop", async (event) => {
 });
 
 applyLanguage();
+syncAttributePanelUi();
 
 map.on("load", async () => {
   try {
@@ -2031,10 +2797,19 @@ map.on("mousemove", (event) => {
   map.getCanvas().style.cursor = features.length ? "pointer" : "";
 });
 
-map.on("click", (event) => {
+map.on("click", async (event) => {
   const features = map.queryRenderedFeatures(event.point, { layers: interactiveUserLayerIds() });
-  const feature = features[0];
-  if (!feature) return;
+  const renderedFeature = features[0];
+  if (!renderedFeature) return;
+  const clickedLayerId = layerIdFromRenderedFeature(renderedFeature);
+  const feature = originalFeatureFromRenderedFeature(renderedFeature);
+  showHighlightedFeature(feature);
+  const featureIndex = Number(feature?.properties?.__featureIndex);
+  if (clickedLayerId && Number.isInteger(featureIndex)) {
+    try {
+      await revealFeatureInAttributeTable(clickedLayerId, featureIndex);
+    } catch (_) {}
+  }
   new maplibregl.Popup({ closeButton: false, maxWidth: "320px" })
     .setLngLat(event.lngLat)
     .setHTML(popupHtml(feature.properties || {}))
