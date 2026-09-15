@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!backend/
+!backend/server.R
+!frontend/
+!frontend/**
+!R/
+!R/plan_caza_data.R
+!data/
+!data/plan_caza_sample.csv
+!data/ccaa_boundaries.geojson
+!data/catalonia_municipalities.geojson

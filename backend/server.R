@@ -8,6 +8,11 @@ library(terra)
 library(png)
 library(base64enc)
 
+access_password <- Sys.getenv("PLANCAZA_PASSWORD", "")
+if (identical(Sys.getenv("RENDER"), "true") && !nzchar(access_password)) {
+  stop("Define PLANCAZA_PASSWORD antes de publicar en Render.")
+}
+
 `%||%` <- function(x, y) {
   if (is.null(x)) y else x
 }
@@ -47,10 +52,13 @@ peninsular_raster_mask <- build_peninsular_mask(plan_shapes, 0)
 
 frontend_dir <- file.path(getwd(), "frontend")
 layer_root <- file.path(getwd(), "data", "layers")
+scenario_root <- file.path(getwd(), "data", "scenarios")
 legacy_layer_dir <- file.path(getwd(), "data", "frontend_layers")
 manifest_path <- file.path(layer_root, "manifest.json")
+scenario_manifest_path <- file.path(scenario_root, "manifest.json")
 
 dir.create(layer_root, showWarnings = FALSE, recursive = TRUE)
+dir.create(scenario_root, showWarnings = FALSE, recursive = TRUE)
 
 json_response <- function(data, status = 200) {
   list(
@@ -88,8 +96,13 @@ read_body <- function(req) {
 
 query_params <- function(req) {
   query <- req$QUERY_STRING %||% ""
-  if (!nzchar(query) && !is.null(req$REQUEST_URI) && grepl("\\?", req$REQUEST_URI)) {
-    query <- sub("^[^?]*\\?", "", req$REQUEST_URI)
+  if (length(query) > 1) query <- query[[1]]
+  query <- as.character(query %||% "")
+  if (!nzchar(query) && !is.null(req$REQUEST_URI)) {
+    request_uri <- as.character(req$REQUEST_URI[[1]] %||% "")
+    if (nzchar(request_uri) && grepl("\\?", request_uri, fixed = FALSE)) {
+      query <- sub("^[^?]*\\?", "", request_uri)
+    }
   }
   if (!nzchar(query)) return(list())
   parts <- strsplit(query, "&", fixed = TRUE)[[1]]
@@ -135,6 +148,88 @@ write_manifest <- function(layers) {
   writeBin(charToRaw(text), manifest_path)
 }
 
+exact_item <- function(x, name, default = NULL) {
+  if (is.list(x) && name %in% names(x)) x[[name]] else default
+}
+
+normalize_scenario <- function(scenario, default_role = "admin") {
+  role <- normalize_role(scenario$role %||% scenario$owner %||% default_role)
+  scope <- tolower(scenario$scope %||% "national")
+  config <- scenario$config %||% list()
+  config$selected_layer_ids <- unique(as.character(unlist(config$selected_layer_ids %||% character())))
+  config$descriptive <- exact_item(config, "descriptive", list())
+  config$descriptive$layerId <- config$descriptive$layerId %||% NULL
+  config$descriptive$field <- config$descriptive$field %||% NULL
+  config$national <- exact_item(config, "national", list())
+  config$national$aggregation <- exact_item(config$national, "aggregation", list())
+  config$national$aggregation$layerId <- config$national$aggregation$layerId %||% NULL
+  config$national$aggregation$field <- config$national$aggregation$field %||% NULL
+  config$national$aggregation$method <- as.character(config$national$aggregation$method %||% "mean")
+  config$national$weights <- exact_item(config$national, "weights", list(items = list()))
+  config$national$weights$items <- exact_item(config$national$weights, "items", list())
+  config$national$model <- exact_item(config$national, "model", list())
+  config$national$model$runLabel <- as.character(config$national$model$runLabel %||% "")
+  config$national$model$priority <- as.character(config$national$model$priority %||% "balanced")
+  config$national$model$solver <- as.character(config$national$model$solver %||% "multiscale")
+  config$national$model$notes <- as.character(config$national$model$notes %||% "")
+  config$national_step <- as.character(config$national_step %||% "layers")
+  list(
+    id = as.character(scenario$id %||% safe_id(paste(scope, "scenario"))),
+    name = as.character(scenario$name %||% "Escenario"),
+    scope = scope,
+    role = role,
+    created_at = as.character(scenario$created_at %||% format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")),
+    updated_at = as.character(scenario$updated_at %||% format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")),
+    config = config
+  )
+}
+
+read_scenarios <- function() {
+  if (!file.exists(scenario_manifest_path)) {
+    return(list())
+  }
+  data <- fromJSON(scenario_manifest_path, simplifyVector = FALSE)
+  scenarios <- data$scenarios %||% list()
+  lapply(scenarios, normalize_scenario)
+}
+
+write_scenarios <- function(scenarios) {
+  text <- toJSON(list(scenarios = scenarios), auto_unbox = TRUE, pretty = TRUE, null = "null")
+  writeBin(charToRaw(text), scenario_manifest_path)
+}
+
+scenarios_for_role <- function(scenarios, role, scope = "national") {
+  role <- normalize_role(role)
+  Filter(function(item) identical(item$scope %||% "national", scope) && identical(normalize_role(item$role), role), lapply(scenarios, normalize_scenario))
+}
+
+scenario_payload_from_state <- function(payload) {
+  list(
+    selected_layer_ids = unique(as.character(unlist(payload$selected_layer_ids %||% character()))),
+    descriptive = list(
+      layerId = payload$descriptive$layerId %||% NULL,
+      field = payload$descriptive$field %||% NULL
+    ),
+    national = list(
+      aggregation = list(
+        layerId = payload$national$aggregation$layerId %||% NULL,
+        field = payload$national$aggregation$field %||% NULL,
+        method = as.character(payload$national$aggregation$method %||% "mean")
+      ),
+      weights = list(
+        items = payload$national$weights$items %||% list()
+      ),
+      model = list(
+        runLabel = as.character(payload$national$model$runLabel %||% ""),
+        priority = as.character(payload$national$model$priority %||% "balanced"),
+        solver = as.character(payload$national$model$solver %||% "multiscale"),
+        notes = as.character(payload$national$model$notes %||% "")
+      )
+    ),
+    national_step = as.character(payload$national_step %||% "layers")
+  )
+}
+
 safe_id <- function(name) {
   cleaned <- iconv(name, to = "ASCII//TRANSLIT", sub = "")
   cleaned <- tolower(gsub("[^a-zA-Z0-9]+", "_", cleaned))
@@ -150,6 +245,7 @@ normalize_role <- function(role) {
 
 normalize_target <- function(target, role) {
   target <- tolower(target %||% role)
+  if (identical(target, "both")) target <- "admin"
   if (!target %in% c("admin", "mapa", "cca", "both")) role else target
 }
 
@@ -303,10 +399,163 @@ detect_csv_coordinates <- function(data) {
   lower_names <- tolower(names(data))
   lon_index <- match(TRUE, lower_names %in% c("lon", "lng", "long", "longitude", "x"))
   lat_index <- match(TRUE, lower_names %in% c("lat", "latitude", "y"))
+  if (!is.na(lon_index) && !is.na(lat_index)) {
+    return(list(
+      mode = "xy",
+      x = names(data)[lon_index],
+      y = names(data)[lat_index]
+    ))
+  }
+
+  mgrs_regex <- "^[0-9]{1,2}[C-HJ-NP-X][A-HJ-NP-Z][A-HJ-NP-V][0-9]{0,10}$"
+  looks_like_mgrs <- function(values) {
+    values <- toupper(trimws(as.character(values)))
+    values <- values[nzchar(values)]
+    if (!length(values)) return(FALSE)
+    matches <- grepl(mgrs_regex, gsub("\\s+", "", values))
+    mean(matches) >= 0.7
+  }
+
+  full_mgrs_idx <- which(vapply(data, looks_like_mgrs, logical(1)))
+  if (length(full_mgrs_idx)) {
+    return(list(
+      mode = "mgrs",
+      field = names(data)[full_mgrs_idx[[1]]]
+    ))
+  }
+
+  zone_idx <- match(TRUE, lower_names %in% c("zone", "zona", "huso", "utm_zone", "mgrs_zone"))
+  cell_idx <- match(TRUE, lower_names %in% c("cell", "celda", "grid", "mgrs", "utm_codigo", "utm_code"))
+  if (!is.na(zone_idx) && !is.na(cell_idx)) {
+    combined <- paste0(as.character(data[[zone_idx]]), as.character(data[[cell_idx]]))
+    if (looks_like_mgrs(combined)) {
+      return(list(
+        mode = "mgrs",
+        zone_field = names(data)[zone_idx],
+        cell_field = names(data)[cell_idx]
+      ))
+    }
+  }
+
   list(
-    x = if (!is.na(lon_index)) names(data)[lon_index] else NULL,
-    y = if (!is.na(lat_index)) names(data)[lat_index] else NULL
+    mode = NULL,
+    x = NULL,
+    y = NULL
   )
+}
+
+mgrs_band_min_lat <- function(band) {
+  bands <- c("C","D","E","F","G","H","J","K","L","M","N","P","Q","R","S","T","U","V","W","X")
+  mins <- c(-80,-72,-64,-56,-48,-40,-32,-24,-16,-8,0,8,16,24,32,40,48,56,64,72)
+  idx <- match(toupper(band), bands)
+  if (is.na(idx)) stop("Banda MGRS no vÃ¡lida.")
+  mins[[idx]]
+}
+
+mgrs_epsg <- function(zone, band) {
+  if (toupper(band) >= "N") 32600 + zone else 32700 + zone
+}
+
+mgrs_column_letters <- function(zone) {
+  sets <- list(
+    c("A", "B", "C", "D", "E", "F", "G", "H"),
+    c("J", "K", "L", "M", "N", "P", "Q", "R"),
+    c("S", "T", "U", "V", "W", "X", "Y", "Z")
+  )
+  sets[[((zone - 1) %% 3) + 1]]
+}
+
+mgrs_row_letters <- function(zone) {
+  if ((zone %% 2) == 1) {
+    c("A","B","C","D","E","F","G","H","J","K","L","M","N","P","Q","R","S","T","U","V")
+  } else {
+    c("F","G","H","J","K","L","M","N","P","Q","R","S","T","U","V","A","B","C","D","E")
+  }
+}
+
+mgrs_parse_code <- function(code) {
+  value <- toupper(gsub("\\s+", "", trimws(as.character(code %||% ""))))
+  parts <- regexec("^([0-9]{1,2})([C-HJ-NP-X])([A-HJ-NP-Z])([A-HJ-NP-V])([0-9]{0,10})$", value)
+  match <- regmatches(value, parts)[[1]]
+  if (!length(match)) return(NULL)
+  digits <- match[[6]]
+  if ((nchar(digits) %% 2) == 1) return(NULL)
+  precision <- nchar(digits) / 2
+  easting_part <- if (precision) substr(digits, 1, precision) else ""
+  northing_part <- if (precision) substr(digits, precision + 1, nchar(digits)) else ""
+  list(
+    code = value,
+    zone = as.integer(match[[2]]),
+    band = match[[3]],
+    column = match[[4]],
+    row = match[[5]],
+    precision = precision,
+    easting_part = easting_part,
+    northing_part = northing_part
+  )
+}
+
+mgrs_to_utm_bbox <- function(code) {
+  parsed <- mgrs_parse_code(code)
+  if (is.null(parsed)) return(NULL)
+
+  col_idx <- match(parsed$column, mgrs_column_letters(parsed$zone))
+  row_idx <- match(parsed$row, mgrs_row_letters(parsed$zone))
+  if (is.na(col_idx) || is.na(row_idx)) return(NULL)
+
+  resolution <- 10^(5 - parsed$precision)
+  easting_offset <- if (parsed$precision) as.numeric(parsed$easting_part) * resolution else 0
+  northing_offset <- if (parsed$precision) as.numeric(parsed$northing_part) * resolution else 0
+  easting <- col_idx * 100000 + easting_offset
+  northing <- (row_idx - 1) * 100000 + northing_offset
+
+  central_lon <- (parsed$zone - 1) * 6 - 180 + 3
+  min_lat <- mgrs_band_min_lat(parsed$band)
+  epsg <- mgrs_epsg(parsed$zone, parsed$band)
+  utm_crs <- sf::st_crs(epsg)
+  min_point <- sf::st_sfc(sf::st_point(c(central_lon, min_lat + 0.01)), crs = 4326)
+  min_northing <- sf::st_coordinates(sf::st_transform(min_point, utm_crs))[1, "Y"]
+  while (northing < min_northing) northing <- northing + 2000000
+
+  list(
+    xmin = easting,
+    ymin = northing,
+    xmax = easting + resolution,
+    ymax = northing + resolution,
+    epsg = epsg
+  )
+}
+
+mgrs_rows_to_sf <- function(data, coords) {
+  codes <- if (!is.null(coords$field)) {
+    data[[coords$field]]
+  } else if (!is.null(coords$zone_field) && !is.null(coords$cell_field)) {
+    paste0(as.character(data[[coords$zone_field]]), as.character(data[[coords$cell_field]]))
+  } else {
+    character()
+  }
+
+  boxes <- lapply(codes, mgrs_to_utm_bbox)
+  valid <- vapply(boxes, function(item) !is.null(item), logical(1))
+  if (!any(valid)) {
+    stop("No se pudieron convertir los cÃ³digos UTM/MGRS del CSV.", call. = FALSE)
+  }
+
+  data <- data[valid, , drop = FALSE]
+  boxes <- boxes[valid]
+  geoms <- lapply(boxes, function(bbox) {
+    matrix(c(
+      bbox$xmin, bbox$ymin,
+      bbox$xmax, bbox$ymin,
+      bbox$xmax, bbox$ymax,
+      bbox$xmin, bbox$ymax,
+      bbox$xmin, bbox$ymin
+    ), ncol = 2, byrow = TRUE)
+  })
+
+  epsg <- boxes[[1]]$epsg
+  sfc <- sf::st_sfc(lapply(geoms, function(coords) sf::st_polygon(list(coords))), crs = sf::st_crs(epsg))
+  sf::st_transform(sf::st_sf(data, geometry = sfc), 4326)
 }
 
 normalize_join_token <- function(values) {
@@ -555,10 +804,10 @@ raster_png_data_url <- function(raster) {
   }
 
   rgba <- array(0, dim = c(rows, cols, 4))
-  rgba[, , 1] <- r[rows:1, ]
-  rgba[, , 2] <- g[rows:1, ]
-  rgba[, , 3] <- b[rows:1, ]
-  rgba[, , 4] <- a[rows:1, ]
+  rgba[, , 1] <- r
+  rgba[, , 2] <- g
+  rgba[, , 3] <- b
+  rgba[, , 4] <- a
 
   png_path <- tempfile(fileext = ".png")
   png::writePNG(rgba, png_path)
@@ -579,10 +828,10 @@ raster_png_raw <- function(raster, min_value = NULL, max_value = NULL) {
     b <- matrix(normalize_band_with_range(values[, 3], min_value, max_value), nrow = rows, ncol = cols, byrow = TRUE)
     a <- matrix(ifelse(is.finite(values[, 1]) & is.finite(values[, 2]) & is.finite(values[, 3]), 0.92, 0), nrow = rows, ncol = cols, byrow = TRUE)
     rgba <- array(0, dim = c(rows, cols, 4))
-    rgba[, , 1] <- r[rows:1, ]
-    rgba[, , 2] <- g[rows:1, ]
-    rgba[, , 3] <- b[rows:1, ]
-    rgba[, , 4] <- a[rows:1, ]
+    rgba[, , 1] <- r
+    rgba[, , 2] <- g
+    rgba[, , 3] <- b
+    rgba[, , 4] <- a
   } else {
     band <- normalize_band_with_range(values[, 1], min_value, max_value)
     r <- matrix(band, nrow = rows, ncol = cols, byrow = TRUE)
@@ -590,10 +839,10 @@ raster_png_raw <- function(raster, min_value = NULL, max_value = NULL) {
     b <- matrix(1 - band, nrow = rows, ncol = cols, byrow = TRUE)
     a <- matrix(ifelse(is.finite(values[, 1]), 0.88, 0), nrow = rows, ncol = cols, byrow = TRUE)
     rgba <- array(0, dim = c(rows, cols, 4))
-    rgba[, , 1] <- r[rows:1, ]
-    rgba[, , 2] <- g[rows:1, ]
-    rgba[, , 3] <- b[rows:1, ]
-    rgba[, , 4] <- a[rows:1, ]
+    rgba[, , 1] <- r
+    rgba[, , 2] <- g
+    rgba[, , 3] <- b
+    rgba[, , 4] <- a
   }
 
   png_path <- tempfile(fileext = ".png")
@@ -663,6 +912,33 @@ raster_preview_payload <- function(file_path) {
   )
 }
 
+raster_point_payload <- function(file_path, lng, lat) {
+  raster <- terra::rast(file_path)
+  if (!isTRUE(terra::same.crs(raster, display_raster_crs))) {
+    raster <- project_raster_for_display(raster, display_raster_crs, peninsular_raster_mask)
+  }
+
+  point_sf <- sf::st_as_sf(data.frame(lng = lng, lat = lat), coords = c("lng", "lat"), crs = 4326)
+  point_projected <- sf::st_transform(point_sf, display_raster_crs)
+  coords <- sf::st_coordinates(point_projected)
+  values <- terra::extract(raster, matrix(c(coords[1, 1], coords[1, 2]), ncol = 2))
+  if (is.null(values) || !nrow(values)) {
+    return(list(ok = TRUE, values = list()))
+  }
+
+  band_values <- values[1, setdiff(names(values), "ID"), drop = FALSE]
+  list(
+    ok = TRUE,
+    values = lapply(seq_along(band_values), function(i) {
+      list(
+        band = i,
+        label = names(band_values)[[i]] %||% paste("Banda", i),
+        value = if (is.na(band_values[[i]])) NULL else unname(band_values[[i]])
+      )
+    })
+  )
+}
+
 base_geojson <- function(metric = "abundance_index") {
   if (!metric %in% names(plan_data)) {
     metric <- "abundance_index"
@@ -713,8 +989,11 @@ province_geojson <- function(metric = "abundance_index") {
 csv_to_sf <- function(rows) {
   data <- dplyr::bind_rows(rows)
   coords <- detect_csv_coordinates(data)
-  if (is.null(coords$x) || is.null(coords$y)) {
-    stop("El CSV necesita columnas lon/lat, lng/lat, longitude/latitude o x/y.")
+  if (identical(coords$mode, "mgrs")) {
+    return(mgrs_rows_to_sf(data, coords))
+  }
+  if (!identical(coords$mode, "xy") || is.null(coords$x) || is.null(coords$y)) {
+    stop("El CSV necesita columnas lon/lat, lng/lat, longitude/latitude o x/y, o bien celdas UTM/MGRS reconocibles.")
   }
   data[[coords$x]] <- as.numeric(data[[coords$x]])
   data[[coords$y]] <- as.numeric(data[[coords$y]])
@@ -882,10 +1161,7 @@ save_frontend_layer <- function(payload, role = "admin") {
   folder <- target_folder(owner, target)
 
   layers <- lapply(layers, normalize_layer)
-  existing <- which(
-    tolower(vapply(layers, function(layer) layer$name, character(1))) == tolower(name) &
-      vapply(layers, function(layer) identical(layer$owner, owner) && identical(layer$target %||% layer$scope, target), logical(1))
-  )
+  existing <- which(tolower(vapply(layers, function(layer) layer$name, character(1))) == tolower(name))
   overwrite <- isTRUE(payload$overwrite)
   if (length(existing) > 0 && !overwrite) {
     return(list(ok = FALSE, exists = TRUE, message = "Ya existe una capa con ese nombre."))
@@ -990,6 +1266,7 @@ save_frontend_layer <- function(payload, role = "admin") {
     audience = as.list(audience),
     visible = TRUE,
     opacity = payload$opacity %||% 0.65,
+    scenario_national_enabled = isTRUE(payload$scenario_national_enabled),
     display_field = display_field,
     popup_fields = normalize_character_vector(selected_fields),
     order = 1,
@@ -1029,6 +1306,15 @@ serve_static <- function(path) {
 app <- list(
   call = function(req) {
     path <- req$PATH_INFO
+    if (nzchar(access_password) && !identical(path, "/api/health")) {
+      expected <- paste0("Basic ", base64enc::base64encode(charToRaw(paste0("plancaza:", access_password))))
+      if (!identical(req$HTTP_AUTHORIZATION, expected)) {
+        return(list(status = 401L,
+                    headers = list("WWW-Authenticate" = 'Basic realm="PLAN-CAZA", charset="UTF-8"',
+                                   "Content-Type" = "text/plain; charset=utf-8", "Cache-Control" = "no-store"),
+                    body = "Acceso restringido al prototipo PLAN-CAZA."))
+      }
+    }
     if (!is.null(req$REQUEST_URI) && grepl("^/api/", req$REQUEST_URI)) {
       path <- sub("\\?.*$", "", req$REQUEST_URI)
     }
@@ -1061,6 +1347,132 @@ app <- list(
     if (identical(path, "/api/layers") && identical(method, "GET")) {
       role <- normalize_role(route_role %||% query_params(req)$role)
       return(json_response(list(role = role, layers = filter_layers_for_role(read_manifest(), role))))
+    }
+    if (identical(path, "/api/scenarios") && identical(method, "GET")) {
+      params <- query_params(req)
+      role <- normalize_role(route_role %||% params$role)
+      scope <- tolower(params$scope %||% "national")
+      scenarios <- scenarios_for_role(read_scenarios(), role, scope)
+      return(json_response(list(ok = TRUE, role = role, scope = scope, scenarios = scenarios)))
+    }
+    if (identical(path, "/api/scenarios") && identical(method, "POST")) {
+      payload <- fromJSON(read_body(req), simplifyVector = FALSE)
+      role <- normalize_role(payload$role %||% route_role %||% query_params(req)$role)
+      scope <- tolower(payload$scope %||% "national")
+      scenarios <- read_scenarios()
+      scenario_id <- payload$id %||% NULL
+      now_utc <- format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+      scenario_name <- trimws(as.character(payload$name %||% ""))
+      if (!nzchar(scenario_name)) {
+        scenario_name <- if (identical(scope, "national")) "Escenario nacional" else "Escenario"
+      }
+      role_scope_scenarios <- scenarios_for_role(scenarios, role, scope)
+      if (nzchar(scenario_name)) {
+        duplicate_name <- Filter(
+          function(item) identical(tolower(item$name %||% ""), tolower(scenario_name)) && !identical(item$id, scenario_id %||% ""),
+          role_scope_scenarios
+        )
+        if (length(duplicate_name)) {
+          return(json_response(list(ok = FALSE, message = "Ya existe un escenario con ese nombre."), 400))
+        }
+      }
+      config <- scenario_payload_from_state(payload$config %||% list())
+      idx <- if (!is.null(scenario_id)) match(scenario_id, vapply(scenarios, function(item) item$id %||% "", character(1))) else NA_integer_
+      if (!is.na(idx)) {
+        current <- normalize_scenario(scenarios[[idx]], role)
+        if (!identical(normalize_role(current$role), role)) {
+          return(json_response(list(ok = FALSE, message = "No tienes permisos para editar este escenario."), 403))
+        }
+        scenarios[[idx]] <- normalize_scenario(modifyList(current, list(
+          name = scenario_name,
+          scope = scope,
+          role = role,
+          updated_at = now_utc,
+          config = config
+        )), role)
+        scenario <- scenarios[[idx]]
+      } else {
+        scenario <- normalize_scenario(list(
+          id = safe_id(paste(scope, "scenario")),
+          name = scenario_name,
+          scope = scope,
+          role = role,
+          created_at = now_utc,
+          updated_at = now_utc,
+          config = config
+        ), role)
+        scenarios <- c(list(scenario), scenarios)
+      }
+      write_scenarios(scenarios)
+      return(json_response(list(
+        ok = TRUE,
+        scenario = scenario,
+        scenarios = scenarios_for_role(scenarios, role, scope)
+      )))
+    }
+    if (grepl("^/api/scenarios/[^/]+/duplicate$", path) && identical(method, "POST")) {
+      id <- sub("^/api/scenarios/([^/]+)/duplicate$", "\\1", path)
+      payload <- fromJSON(read_body(req), simplifyVector = FALSE)
+      role <- normalize_role(payload$role %||% route_role %||% query_params(req)$role)
+      scenarios <- read_scenarios()
+      idx <- match(id, vapply(scenarios, function(item) item$id %||% "", character(1)))
+      if (is.na(idx)) {
+        return(json_response(list(ok = FALSE, message = "Escenario no encontrado."), 404))
+      }
+      source_scenario <- normalize_scenario(scenarios[[idx]], role)
+      if (!identical(normalize_role(source_scenario$role), role)) {
+        return(json_response(list(ok = FALSE, message = "No tienes permisos para duplicar este escenario."), 403))
+      }
+      scope <- source_scenario$scope %||% "national"
+      existing_names <- vapply(scenarios_for_role(scenarios, role, scope), function(item) item$name %||% "", character(1))
+      base_name <- trimws(as.character(payload$name %||% paste0(source_scenario$name %||% "Escenario", " copia")))
+      candidate <- base_name
+      counter <- 2
+      while (candidate %in% existing_names) {
+        candidate <- paste(base_name, counter)
+        counter <- counter + 1
+      }
+      now_utc <- format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+      duplicated <- normalize_scenario(list(
+        id = safe_id(paste(scope, "scenario")),
+        name = candidate,
+        scope = scope,
+        role = role,
+        created_at = now_utc,
+        updated_at = now_utc,
+        config = source_scenario$config %||% list()
+      ), role)
+      scenarios <- c(list(duplicated), scenarios)
+      write_scenarios(scenarios)
+      return(json_response(list(
+        ok = TRUE,
+        scenario = duplicated,
+        scenarios = scenarios_for_role(scenarios, role, scope)
+      )))
+    }
+    if (grepl("^/api/scenarios/[^/]+$", path) && identical(method, "DELETE")) {
+      id <- sub("^/api/scenarios/([^/]+)$", "\\1", path)
+      params <- query_params(req)
+      role <- normalize_role(route_role %||% params$role)
+      scope <- tolower(params$scope %||% "national")
+      scenarios <- read_scenarios()
+      idx <- match(id, vapply(scenarios, function(item) item$id %||% "", character(1)))
+      if (is.na(idx)) {
+        return(json_response(list(ok = FALSE, message = "Escenario no encontrado."), 404))
+      }
+      current <- normalize_scenario(scenarios[[idx]], role)
+      if (!identical(normalize_role(current$role), role)) {
+        return(json_response(list(ok = FALSE, message = "No tienes permisos para eliminar este escenario."), 403))
+      }
+      scenarios <- scenarios[-idx]
+      write_scenarios(scenarios)
+      remaining <- scenarios_for_role(scenarios, role, scope)
+      active_scenario_id <- if (length(remaining)) remaining[[1]]$id %||% NULL else NULL
+      return(json_response(list(
+        ok = TRUE,
+        active_scenario_id = active_scenario_id,
+        scenarios = remaining
+      )))
     }
     if (identical(path, "/api/import/inspect") && identical(method, "POST")) {
       payload <- fromJSON(read_body(req), simplifyVector = FALSE)
@@ -1118,6 +1530,19 @@ app <- list(
         }
         if (!is.null(payload$visible)) layers[[idx]]$visible <- isTRUE(payload$visible)
         if (!is.null(payload$opacity)) layers[[idx]]$opacity <- as.numeric(payload$opacity)
+        if (!is.null(payload$scenario_national_enabled)) layers[[idx]]$scenario_national_enabled <- isTRUE(payload$scenario_national_enabled)
+        if ("display_field" %in% names(payload)) {
+          display_field <- trimws(as.character(payload$display_field %||% ""))
+          if (!nzchar(display_field)) {
+            layers[[idx]]$display_field <- NULL
+          } else {
+            valid_fields <- vapply(layers[[idx]]$metadata$field_info %||% list(), function(item) item$name %||% "", character(1))
+            if (!display_field %in% valid_fields) {
+              return(json_response(list(ok = FALSE, message = "El campo de visualización no existe en esta capa."), 400))
+            }
+            layers[[idx]]$display_field <- display_field
+          }
+        }
         if (!is.null(payload$name)) {
           new_name <- trimws(as.character(payload$name))
           if (!nzchar(new_name)) {
@@ -1165,6 +1590,20 @@ app <- list(
       }
       return(text_response(paste(readLines(file_path, warn = FALSE, encoding = "UTF-8"), collapse = "\n"), "application/geo+json; charset=utf-8"))
     }
+    if (grepl("^/api/layers/[^/]+/value$", path)) {
+      id <- sub("^/api/layers/([^/]+)/value$", "\\1", path)
+      payload <- tryCatch(fromJSON(read_body(req)), error = function(e) list())
+      lng <- suppressWarnings(as.numeric(as.character(payload$lng %||% NA)))
+      lat <- suppressWarnings(as.numeric(as.character(payload$lat %||% NA)))
+      if (!is.finite(lng) || !is.finite(lat)) return(json_response(list(error = "Coordenadas inválidas"), 400))
+      layers <- read_manifest()
+      idx <- match(id, vapply(layers, function(layer) layer$id, character(1)))
+      if (is.na(idx)) return(json_response(list(error = "No encontrada"), 404))
+      if (!identical(layers[[idx]]$type, "raster")) return(json_response(list(error = "No es raster"), 400))
+      file_path <- layer_file_path(layers[[idx]])
+      if (!file.exists(file_path)) return(json_response(list(error = "Sin archivo"), 404))
+      return(json_response(raster_point_payload(file_path, lng, lat)))
+    }
     if (grepl("^/api/layers/[^/]+/download\\.csv$", path)) {
       id <- sub("^/api/layers/([^/]+)/download\\.csv$", "\\1", path)
       layers <- read_manifest()
@@ -1199,6 +1638,7 @@ app <- list(
   }
 )
 
-port <- as.integer(Sys.getenv("PLANCAZA_PORT", "8080"))
-cat(sprintf("PLAN-CAZA MapLibre app: http://127.0.0.1:%s\n", port))
-httpuv::runServer("127.0.0.1", port, app)
+port <- as.integer(Sys.getenv("PORT", Sys.getenv("PLANCAZA_PORT", "8080")))
+host <- Sys.getenv("PLANCAZA_HOST", "127.0.0.1")
+cat(sprintf("PLAN-CAZA MapLibre app: http://%s:%s\n", host, port))
+httpuv::runServer(host, port, app)

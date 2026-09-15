@@ -5,16 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PLAN-CAZA MapLibre</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="/styles.css?v=20260626w" />
+  <link rel="stylesheet" href="/styles.css?v=20260628g" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">PLAN-CAZA</div>
     <nav>
-      <button class="active" data-i18n="navInput">Datos de entrada</button>
-      <button data-i18n="navNational">Escenario nacional</button>
-      <button data-i18n="navRegional">Escenario regional</button>
-      <button data-i18n="navExport">Exportación</button>
+      <button class="active" data-section="input" data-i18n="navInput">Datos de entrada</button>
+      <button data-section="national" data-i18n="navNational">Planificaci?n nacional</button>
+      <button data-section="regional" data-i18n="navRegional">Planificaci?n regional</button>
+      <button data-section="analysis" data-i18n="navAnalysis">Análisis de escenarios</button>
+      <button data-i18n="navExport">Exportaci?n</button>
     </nav>
     <div class="language-switch" aria-label="Idioma">
       <button class="active" data-lang="es">ES</button>
@@ -33,19 +34,20 @@
   <main class="workspace">
     <aside class="layer-panel" id="layerPanel">
       <div class="panel-header">
-        <strong data-i18n="layers">Capas</strong>
+        <strong id="panelTitle" data-i18n="layers">Capas</strong>
         <div class="panel-actions">
           <button id="createGroup" class="panel-icon-button group-button" title="Crear grupo" aria-label="Crear grupo"></button>
-          <button id="openAddData" class="panel-icon-button add-layer-button" title="Añadir datos" aria-label="Añadir datos"></button>
+          <button id="openAddData" class="panel-icon-button add-layer-button" title="A?adir datos" aria-label="A?adir datos"></button>
           <button class="panel-toggle panel-icon-button" id="hidePanel" title="Ocultar panel" aria-label="Ocultar panel">&lsaquo;</button>
         </div>
       </div>
       <button class="collapsed-rail" id="showPanel" title="Mostrar panel">
-        <span class="rail-icon">▣</span>
-        <span class="rail-layer-icon">▱</span>
+        <span class="rail-icon">?</span>
+        <span class="rail-layer-icon">?</span>
         <span class="rail-label" data-i18n="layers">Capas</span>
       </button>
 
+      <div id="inputWorkspace" class="sidebar-workspace">
       <section class="layer-list">
         <div id="layerTree" class="layer-tree"></div>
       </section>
@@ -53,9 +55,20 @@
         <div class="map-search-box">
           <span class="map-search-icon" aria-hidden="true"></span>
           <input id="mapSearchInput" type="text" autocomplete="off" spellcheck="false" />
-          <button id="mapSearchClear" class="map-search-clear is-hidden" type="button" aria-label="Limpiar búsqueda" title="Limpiar búsqueda"></button>
+          <button id="mapSearchClear" class="map-search-clear is-hidden" type="button" aria-label="Limpiar b?squeda" title="Limpiar b?squeda"></button>
         </div>
         <div id="mapSearchResults" class="map-search-results is-hidden"></div>
+      </div>
+      </div>
+      <div id="scenarioWorkspace" class="sidebar-workspace is-hidden">
+        <div class="scenario-header">
+          <span id="scenarioSectionEyebrow" class="scenario-eyebrow">Planificaci?n nacional</span>
+          <h2 id="scenarioSectionTitle" class="scenario-title">Escenarios nacionales</h2>
+          <p id="scenarioSectionDescription" class="scenario-description"></p>
+          <div id="scenarioMetaBar" class="scenario-meta-bar is-hidden"></div>
+        </div>
+        <div id="scenarioStepNav" class="scenario-step-nav"></div>
+        <div id="scenarioPanelBody" class="scenario-panel-body"></div>
       </div>
     </aside>
 
@@ -83,7 +96,7 @@
         <button id="saveAttributeTable" class="attribute-panel-button with-label primary-action" type="button">Guardar</button>
         <label class="attribute-zoom-toggle">
           <input id="attributeZoomToSelection" type="checkbox" checked />
-          <span>Zoom a selección</span>
+          <span>Zoom a selecci?n</span>
         </label>
         <div class="attribute-toolbar-pagination header-pagination">
           <label>
@@ -172,7 +185,6 @@
           <option value="admin" data-i18n="targetAdmin">Datos comunes</option>
           <option value="mapa" data-i18n="targetMapa">Datos MAPA</option>
           <option value="cca" data-i18n="targetCca">Datos CCA</option>
-          <option value="both" data-i18n="targetBoth">Datos MAPA + CCA</option>
         </select>
       </label>
       <p class="dialog-message" id="layerWarning"></p>
@@ -202,6 +214,6 @@
 
   <div id="toast" class="toast"></div>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script src="/app.js?v=20260626w"></script>
+  <script src="/app.js?v=20260628g"></script>
 </body>
 </html>

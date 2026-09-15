@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: plancaza-demo
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: PLANCAZA_HOST
+        value: 0.0.0.0
+      - key: PLANCAZA_PASSWORD
+        sync: false
