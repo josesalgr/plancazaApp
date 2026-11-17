@@ -33,6 +33,14 @@ body {
   font-weight: 700;
 }
 
+.brand-version {
+  margin-left: 1px;
+  font-size: 0.6rem;
+  font-weight: 400;
+  color: #dcecea;
+  vertical-align: super;
+}
+
 nav {
   display: flex;
   gap: 2px;
