@@ -561,6 +561,8 @@ const map = new maplibregl.Map({
   zoom: 4.8,
 });
 
+window.ContractLiveMap?.attach(map);
+
 let searchAbortController = null;
 let searchDebounceTimer = null;
 let searchResults = [];
@@ -2449,6 +2451,8 @@ function syncSectionUi() {
 
   const isInput = state.section === "input";
   const isNational = state.section === "national";
+  window.ContractData?.sync(state.section);
+  window.NationalPlanning?.sync(isNational, state.role);
   const isRegional = state.section === "regional";
   const isAnalysis = state.section === "analysis";
   const isExport = state.section === "export";
@@ -2464,9 +2468,7 @@ function syncSectionUi() {
     restoreInputWorkspaceSnapshot();
   }
 
-  if (isNational) {
-    renderNationalPanel();
-  } else if (isRegional) {
+  if (isRegional) {
     renderRegionalPanel();
   } else if (isAnalysis) {
     renderAnalysisPanel();
@@ -2474,6 +2476,7 @@ function syncSectionUi() {
     renderExportPanel();
   }
 
+  window.ContractData?.mapReady();
   requestAnimationFrame(() => map.resize());
 }
 
@@ -5082,6 +5085,7 @@ map.on("load", async () => {
     await loadBaseLayers();
     await loadLayers();
     await ensureScenarioCollection();
+    window.ContractData?.mapReady();
     syncMapScalePosition();
     updateMapStatus();
   } catch (error) {
@@ -5090,6 +5094,7 @@ map.on("load", async () => {
 });
 
 map.on("mousemove", (event) => {
+  if (state.section === "input" || state.section === "national") return;
   updateMapStatus(event.lngLat);
   const hoveredLayers = activePopupLayerId ? interactiveLayerIdsForLayer(activePopupLayerId) : [];
   const features = hoveredLayers.length ? map.queryRenderedFeatures(event.point, { layers: hoveredLayers }) : [];
@@ -5097,6 +5102,7 @@ map.on("mousemove", (event) => {
 });
 
 map.on("click", async (event) => {
+  if (state.section === "input" || state.section === "national") return;
   if (!activePopupLayerId) return;
 
   const targetPopupLayer = activePopupLayerId ? state.layers.find((layer) => layer.id === activePopupLayerId) || null : null;

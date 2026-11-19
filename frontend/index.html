@@ -3,13 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PLAN-CAZA MapLibre</title>
+  <title>PLAN-CAZA · 0.0.2</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="/styles.css?v=20260628g" />
+  <link rel="stylesheet" href="/styles.css?v=0.0.2" />
+  <link rel="stylesheet" href="/contracts.css?v=0.0.2" />
+  <link rel="stylesheet" href="/national-planning.css?v=0.0.2" />
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">PLAN-CAZA<span class="brand-version" aria-label="Versión 0.0.1">0.0.1</span></div>
+    <div class="brand">PLAN-CAZA<span class="brand-version" aria-label="Versión 0.0.2">0.0.2</span></div>
     <nav>
       <button class="active" data-section="input" data-i18n="navInput">Datos de entrada</button>
       <button data-section="national" data-i18n="navNational">Planificaci?n nacional</button>
@@ -31,7 +33,12 @@
     </label>
   </header>
 
+  <dialog id="ncDialog" class="nc-dialog"></dialog>
+  <dialog id="npDialog" class="nc-dialog"></dialog>
+
   <main class="workspace">
+    <section id="nationalData" class="national-data" aria-label="Gestión de datos nacionales"></section>
+    <section id="nationalPlanning" class="national-data" aria-label="Planificación nacional" hidden></section>
     <aside class="layer-panel" id="layerPanel">
       <div class="panel-header">
         <strong id="panelTitle" data-i18n="layers">Capas</strong>
@@ -74,6 +81,14 @@
 
     <section class="map-shell">
       <div id="map"></div>
+      <div id="ncSecondaryMap" hidden></div>
+      <div id="ncMapOverlay" hidden>
+        <div id="ncLiveTitle" class="nc-live-title"></div>
+        <div id="ncMapLabelA" class="nc-map-label nc-map-label-a"></div>
+        <div id="ncMapLabelB" class="nc-map-label nc-map-label-b"></div>
+        <div id="ncMapTools" class="nc-map-tools"><button type="button" data-fit="mainland">Península y Baleares</button></div>
+        <div id="ncLiveLegend" class="nc-map-legend nc-live-legend"></div>
+      </div>
       <button id="fullscreenMap" class="map-overlay-button fullscreen-map" type="button" title="Pantalla completa" aria-label="Pantalla completa"></button>
       <div id="mapLegend" class="map-legend is-hidden"></div>
       <div id="mapScale" class="map-scale"></div>
@@ -213,7 +228,14 @@
   </dialog>
 
   <div id="toast" class="toast"></div>
+  <script src="/contracts-core.js?v=0.0.2"></script>
+  <script src="/contracts-maps.js?v=0.0.2"></script>
+  <script src="/contracts-map-live.js?v=0.0.2"></script>
+  <script src="/contracts-dock.js?v=0.0.2"></script>
+  <script src="/contracts.js?v=0.0.2"></script>
+  <script src="/planning-weights.js?v=0.0.2"></script>
+  <script src="/national-planning.js?v=0.0.2"></script>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script src="/app.js?v=20260628g"></script>
+  <script src="/app.js?v=0.0.2"></script>
 </body>
 </html>

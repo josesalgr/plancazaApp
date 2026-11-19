@@ -60,7 +60,7 @@ scenario_manifest_path <- file.path(scenario_root, "manifest.json")
 dir.create(layer_root, showWarnings = FALSE, recursive = TRUE)
 dir.create(scenario_root, showWarnings = FALSE, recursive = TRUE)
 
-json_response <- function(data, status = 200) {
+json_response <- function(data, status = 200, digits = 8) {
   list(
     status = status,
     headers = list(
@@ -72,7 +72,7 @@ json_response <- function(data, status = 200) {
       "Access-Control-Allow-Headers" = "Content-Type",
       "Access-Control-Allow-Methods" = "GET, POST, DELETE, OPTIONS"
     ),
-    body = toJSON(data, auto_unbox = TRUE, null = "null", digits = 8)
+    body = toJSON(data, auto_unbox = TRUE, null = "null", digits = digits)
   )
 }
 
@@ -104,6 +104,7 @@ query_params <- function(req) {
       query <- sub("^[^?]*\\?", "", request_uri)
     }
   }
+  query <- sub("^\\?", "", query)
   if (!nzchar(query)) return(list())
   parts <- strsplit(query, "&", fixed = TRUE)[[1]]
   values <- setNames(vector("list", length(parts)), character(length(parts)))
@@ -1290,7 +1291,11 @@ serve_static <- function(path) {
     full_path <- file.path(frontend_dir, "index.html")
   }
   ext <- tolower(tools::file_ext(full_path))
-  type <- switch(ext, html = "text/html; charset=utf-8", css = "text/css; charset=utf-8", js = "application/javascript; charset=utf-8", json = "application/json; charset=utf-8", "application/octet-stream")
+  type <- switch(ext,
+    html = "text/html; charset=utf-8", css = "text/css; charset=utf-8",
+    js = "application/javascript; charset=utf-8", json = "application/json; charset=utf-8",
+    jpg = "image/jpeg", webp = "image/webp", "application/octet-stream"
+  )
   list(
     status = 200,
     headers = list(
@@ -1302,6 +1307,9 @@ serve_static <- function(path) {
     body = readBin(full_path, "raw", n = file.info(full_path)$size)
   )
 }
+
+source("backend/contracts.R", encoding = "UTF-8")
+source("backend/national-planning.R", encoding = "UTF-8")
 
 app <- list(
   call = function(req) {
@@ -1328,8 +1336,10 @@ app <- list(
     if (identical(method, "OPTIONS")) {
       return(json_response(list(ok = TRUE)))
     }
+    if (startsWith(path, "/api/national-data")) return(nc_route(req, path, method))
+    if (startsWith(path, "/api/national-planning")) return(np_route(req, path, method))
     if (identical(path, "/api/health")) {
-      return(json_response(list(ok = TRUE, service = "PLAN-CAZA R backend")))
+      return(json_response(list(ok = TRUE, service = "PLAN-CAZA R backend", version = "0.0.2")))
     }
     if (identical(path, "/api/base-layer/ccaa")) {
       return(text_response(base_geojson("abundance_index"), "application/geo+json; charset=utf-8"))

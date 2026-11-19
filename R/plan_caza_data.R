@@ -4,6 +4,7 @@ load_plan_caza_data <- function(path = "data/plan_caza_sample.csv") {
   }
 
   read.csv(path, stringsAsFactors = FALSE, fileEncoding = "UTF-8") |>
+    filter(autonomous_community != "Canarias") |>
     mutate(
       sensitive_area = as.logical(sensitive_area),
       active_management = as.logical(active_management)
@@ -36,6 +37,7 @@ load_ccaa_shapes <- function(path = "data/ccaa_boundaries.geojson", include_auto
   }
 
   shapes |>
+    filter(autonomous_community != "Canarias") |>
     select(autonomous_community, shapeName, geometry)
 }
 

@@ -1,0 +1,79 @@
+#nationalPlanning .np-sidebar {font-family:"Source Sans 3",system-ui,sans-serif;}
+#nationalPlanning .np-species {display:flex;align-items:center;gap:12px;margin-bottom:16px;}
+#nationalPlanning .np-species img {width:92px;height:auto;flex:none;}
+#nationalPlanning .np-species h1 {font:400 clamp(22px,2vw,31px)/1.1 "Noto Serif",Georgia,serif;margin:0 0 3px;letter-spacing:-.025em;}
+#nationalPlanning .np-species p {font-size:13px;line-height:1.25;}
+#nationalPlanning label {margin:0;color:var(--atlas-ink);font-size:13px;}
+#nationalPlanning input,#nationalPlanning select {
+  min-width:0;padding:6px 7px;border-color:#d0d2c2;border-radius:4px;
+  background:#fffdf7;
+}
+#nationalPlanning .np-quota {display:grid;grid-template-columns:1fr minmax(0,126px);align-items:center;gap:10px;margin-bottom:12px;}
+#npQuota,#nationalPlanning .np-weights input {text-align:right;font-variant-numeric:tabular-nums;}
+#npQuotaError {margin:-6px 0 10px;font-size:12px;color:#9c3427;}
+#npQuotaError[hidden] {display:none;}
+#nationalPlanning .np-scenario {margin-bottom:12px;}
+#nationalPlanning .np-scenario .nc-actions {margin-top:6px;}
+#nationalPlanning .np-scenario button {
+  background:none;border:0;padding:3px 0;color:var(--atlas-blue);text-decoration:underline;
+  text-underline-offset:3px;
+}
+#nationalPlanning .np-config {margin-bottom:8px;}
+#nationalPlanning .np-config > summary {padding:9px 2px;}
+#nationalPlanning .np-config[open] {padding-bottom:10px;}
+#nationalPlanning .np-weights {display:grid;gap:5px;}
+#nationalPlanning .np-weights label {
+  display:grid;grid-template-columns:1fr 68px 15px;align-items:center;gap:5px;
+}
+.np-weight-bar {height:7px;display:flex;border-radius:3px;overflow:hidden;background:#e1e4d7;margin-top:8px;}
+.np-weight-bar i {height:100%;background:#607a4b;}
+.np-weight-bar i:nth-child(2) {background:#407eab;}
+.np-weight-bar i:nth-child(3) {background:#a66e3d;}
+.np-total {display:flex;justify-content:space-between;margin:3px 0 0;font-size:12px;}
+.np-invalid {color:#9c3427;}
+.np-source {border-top:1px solid var(--atlas-rule);margin-top:9px;padding-top:7px;}
+.np-source label + label {margin-top:4px !important;}
+.np-source p {margin:3px 0;font-size:12px;overflow-wrap:anywhere;}
+.np-capture-years {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:4px;}
+.np-source .np-capture-years label {margin-top:0 !important;}
+.np-capture-missing {margin-top:4px;font-size:12px;}
+.np-capture-missing summary {color:var(--atlas-blue);cursor:pointer;}
+.np-capture-missing ul {padding-left:18px;margin:4px 0;}
+#nationalPlanning .np-preview {margin:3px 0 8px;background:#164c65;border-color:#164c65;}
+#nationalPlanning .np-preview:hover {background:#0a3f57;}
+.np-status {margin:0 0 8px;font-size:13px;}
+.np-status:empty {display:none;}
+#npInspector {margin-top:5px;}
+.np-example {font-size:12px;margin:0 0 8px;}
+.np-community h2 {font:400 20px/1.15 "Noto Serif",Georgia,serif;margin:10px 0 5px;}
+.np-community strong {font-size:20px;font-variant-numeric:tabular-nums;}
+.np-community p {margin:0 0 2px;}
+.np-pairs {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:5px 0 8px;}
+.np-pairs[hidden] {display:none;}
+.np-batch-toolbar {margin:3px 0 7px;}
+#nationalPlanning .np-dock .np-batch-toolbar button {padding:6px 8px;}
+#nationalPlanning .np-dock button[aria-pressed="true"] {border-color:var(--atlas-blue);color:var(--atlas-blue);}
+#nationalPlanning .np-batch-table {overflow:auto;}
+.np-batch-table table {min-width:635px;}
+.np-batch-table td {vertical-align:top;}
+.np-batch-table td:nth-child(n+2):nth-child(-n+4) {width:105px;}
+.np-batch-table td:nth-child(5) {width:104px;white-space:normal;font-size:12px;}
+.np-batch-table .np-selected td {background:#edf1e5;}
+#nationalPlanning .np-batch-table td button {padding:5px 7px;white-space:nowrap;}
+body.np-active .nc-live-title {color:var(--atlas-ink);background:#fffdf7;}
+@media(min-width:581px) {
+  body.catalog-visible.nc-atlas.np-active:not(.nc-dock-expanded):not(.nc-dock-collapsed) .workspace {
+    grid-template-rows:minmax(240px,1fr) var(--nc-dock-height,minmax(300px,35%));
+  }
+}
+@media(max-width:580px) {
+  body.np-active #nationalPlanning .np-sidebar {max-height:none;}
+  .np-batch-toolbar {gap:5px;}
+  #nationalPlanning .np-dock-header {padding-inline:6px;gap:3px;}
+  #nationalPlanning .np-dock-header .nc-tabs button {padding-inline:6px;}
+  body.np-active .nc-split-map #map {height:50%;width:100%;}
+  body.np-active .nc-split-map #ncSecondaryMap {inset:50% 0 0;border-left:0;border-top:2px solid #fff;}
+  body.np-active .nc-split-map .nc-map-label-a {top:82px;}
+  body.np-active .nc-split-map .nc-map-label-b {top:calc(50% + 12px);left:55px;}
+  body.np-active .nc-split-map .nc-live-legend {bottom:9px;}
+}

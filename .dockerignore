@@ -2,6 +2,9 @@
 !Dockerfile
 !backend/
 !backend/server.R
+!backend/contracts.R
+!backend/install-planning-dependencies.R
+!backend/national-planning.R
 !frontend/
 !frontend/**
 !R/

@@ -9,3 +9,6 @@ data/esp_municipalities_adm3.geojson
 data/uploaded_layers/
 data/frontend_layers/
 data/layers/
+
+data/national/
+data/scenarios/

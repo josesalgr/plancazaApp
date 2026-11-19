@@ -23,6 +23,15 @@ install.packages(c("shiny", "bslib", "bsicons", "dplyr", "tidyr", "ggplot2", "DT
 shiny::runApp()
 ```
 
+## Reparto nacional de la versión web
+
+El backend web usa la rama de decisiones enteras de `multiscape` con `rcbc`. En Windows, la instalación desde código fuente requiere Rtools. En Debian o Ubuntu requiere las bibliotecas y cabeceras de CBC y CLP (`coinor-libcbc-dev` y `coinor-libclp-dev`). Ejecuta el instalador desde la raíz del proyecto con R.
+
+```sh
+Rscript backend/install-planning-dependencies.R
+Rscript backend/server.R
+```
+
 ## Estructura
 
 - `app.R`: interfaz y servidor Shiny.

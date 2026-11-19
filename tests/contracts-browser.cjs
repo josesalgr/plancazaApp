@@ -1,0 +1,75 @@
+// Run against an isolated PLANCAZA_DATA_DIR, never the production catalog.
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+(async()=>{
+  const browser=await chromium.launch({headless:true,channel:'chrome'});
+  const page=await browser.newPage({viewport:{width:1440,height:1100}});
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  const base=process.env.TEST_URL||'http://127.0.0.1:8081';
+  const suffix=Date.now();
+  await page.goto(base);await page.locator('[data-nc="manage-series"]').waitFor();
+  const click=async(a)=>page.locator(`#nationalData [data-nc="${a}"]`).first().click();
+  const submit=async()=>{await page.locator('#ncDialog button[type="submit"]').click();await page.locator('#ncDialog').waitFor({state:'hidden'});};
+  async function create(component,name) {
+    await page.locator(`[data-nc="component"][data-key="${component}"]`).click();
+    if(await page.locator('[data-nc="manage-series"]').getAttribute('aria-expanded')==='false')await click('manage-series');
+    await click('new-series');
+    await page.locator('#ncDialog [name="name"]').fill(name);
+    await page.locator('#ncDialog [name="source"]').fill('Datos ficticios de prueba');
+    await page.locator('#ncDialog [name="definition"]').fill('Indicador de prueba, comparable en el tiempo.');
+    await page.locator('#ncDialog [name="unit"]').fill(component==='tendencias'?'Criterio externo documentado':'Índice de prueba');
+    if(component==='abundancias') {await page.locator('[name="minimum"]').fill('0');await page.locator('[name="maximum"]').fill('100');}
+    await submit();
+    await click('new-interval');
+    await page.locator('#ncDialog [name="name"]').fill('Evaluación 2025');
+    await page.locator('#ncDialog [name="start"]').fill('2025-01-01');
+    await page.locator('#ncDialog [name="end"]').fill('2025-12-31');
+    await submit();
+  }
+  async function saveReview(reason) {await page.locator('#ncDialog [name="reason"]').fill(reason);await submit();}
+  const name=`Abundancia QA ${suffix}`;
+  await create('abundancias',name);
+  await click('edit');
+  await page.locator('tr[data-code="01"] [data-value]').fill('0');
+  await page.locator('tr[data-code="02"] [data-value]').fill('50');
+  await page.locator('tr[data-code="03"] [data-value]').fill('75');
+  await click('review');await saveReview('Primera carga de prueba');
+  assert.match(await page.locator('#nationalData').innerText(),/3 de 16/);
+  await click('edit-series');
+  assert.equal(await page.locator('#ncDialog [name="definition"]').getAttribute('readonly'),'');
+  await page.locator('#ncDialog [name="name"]').fill(name+' editada');
+  await page.locator('#ncDialog [name="reason"]').fill('Corrección del nombre');await submit();
+  await page.locator('[data-nc="tab"][data-tab="explore"]').click();
+  assert.match(await page.locator('#nationalData').innerText(),/41,667/);
+  await page.screenshot({path:process.env.QA_DIR+'/explore.png',fullPage:true});
+  await page.locator('#ncCommunity').selectOption('01');
+  assert.match(await page.locator('#nationalData').innerText(),/Historia de la comunidad/);
+  await page.locator('[data-nc="tab"][data-tab="data"]').click();
+  const [dl]=await Promise.all([page.waitForEvent('download'),click('template')]);
+  await dl.saveAs(process.env.QA_DIR+'/template.xlsx');assert.ok(fs.statSync(process.env.QA_DIR+'/template.xlsx').size>1000);
+  const [chooser]=await Promise.all([page.waitForEvent('filechooser'),click('import')]);
+  await chooser.setFiles({name:'datos.csv',mimeType:'text/csv',buffer:Buffer.from('ccaa_codigo,indice_abundancia,observaciones\n01,,Se conserva el cero\n02,60,Corrección\n04,25,Nuevo\n')});
+  await page.locator('#ncDialog [name="reason"]').waitFor();await saveReview('Importación CSV');
+  assert.match(await page.locator('#nationalData').innerText(),/4 de 16/);
+  await click('edit');await page.locator('tr[data-code="02"] [data-clear]').check();await click('review');await saveReview('Retirada explícita');
+  assert.match(await page.locator('#nationalData').innerText(),/3 de 16/);
+  await page.locator('[data-nc="tab"][data-tab="history"]').click();
+  await page.locator('[data-nc="snapshot"]').first().click();await page.locator('#ncDialog button[type="submit"]').click();
+  await create('tendencias',`Tendencias QA ${suffix}`);
+  await click('edit');await page.locator('tr[data-code="01"] [data-value]').selectOption('incierta');await page.locator('tr[data-code="02"] [data-value]').selectOption('aumento_fuerte');await click('review');await saveReview('Categorías de prueba');
+  await page.locator('[data-nc="tab"][data-tab="explore"]').click();assert.match(await page.locator('#nationalData').innerText(),/Distribución de tendencias/);
+  await page.screenshot({path:process.env.QA_DIR+'/trends.png',fullPage:true});
+  await create('historico_caza',`Capturas QA ${suffix}`);
+  await click('edit');await page.locator('tr[data-code="01"] [data-value]').fill('0');await page.locator('tr[data-code="02"] [data-value]').fill('200');await click('review');await saveReview('Capturas de prueba');
+  await page.locator('[data-nc="tab"][data-tab="explore"]').click();assert.match(await page.locator('#nationalData').innerText(),/Suma de capturas observadas/);
+  await page.reload();await page.locator('[data-nc="manage-series"]').waitFor();
+  const catalog=await (await page.request.get(base+'/api/national-data')).json();assert.ok(catalog.catalog.series.some(s=>s.name===name+' editada'));
+  const stale=await page.request.post(base+'/api/national-data',{data:{action:'series',revision:0}});assert.equal(stale.status(),409);
+  await page.waitForFunction(()=>map.getSource('nc-contract')?._data?.features.length===16);
+  await page.setViewportSize({width:390,height:844});await page.screenshot({path:process.env.QA_DIR+'/mobile.png',fullPage:true});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth),false);
+  assert.deepEqual(errors,[]);
+  console.log('Browser workflow passed: three components, editing, imports, blank/zero semantics, explicit withdrawal, revisions, download, persistence, conflict, charts and mobile.');
+  await browser.close();
+})().catch(e=>{console.error(e);process.exit(1)});
